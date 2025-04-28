@@ -670,7 +670,7 @@ else:
     #plot 2D ROIs
     if ROI_dimensions==2:
         fig,ax=plt.subplots()
-        g=sns.heatmap(rois.reshape(xpix,ypix).T)
+        g=sns.heatmap(rois.reshape(int(round(xpix/ROI_bin_pixels,0)),int(round(ypix/ROI_bin_pixels,0))).T)
         
         #update to pixels to micrometers
         ax.set_yticklabels((np.linspace(0,y_um,len(g.get_yticks()))).astype(int),rotation=0)
@@ -690,7 +690,7 @@ else:
         rdf["z"]=rdf["z"]*sputtertime/scans*ROI_bin_scans
         rdf["r"]=rdf["r"].astype(str)
         
-        #%%
+     
         
         #plot all
         fig = px.scatter_3d(rdf, x='x', y='y', z='z',
@@ -708,13 +708,14 @@ else:
             eye=dict(x=1.65, y=1.25, z=1.55)
         )
 
-
+        fig.update_scenes(zaxis_autorange="reversed")
         fig.update_layout(scene_camera=camera, title="ROI 3D combined segmentation")
         
         fig.show()
         fig.write_html(fs+"_ROI_3D_combined.html") #save 3d ROI plot
     
         #plot separate segments
+        #%%
         for roi in range(ROI_clusters):
             
             d=rdf[rdf["r"]==str(roi)]
@@ -726,10 +727,10 @@ else:
                               
                                         color=px.colors.qualitative.Safe[roi])),
                   
-            
+
             fig.update_layout(scene = dict(xaxis=dict(title=dict(text='x [micrometer]'),  range=[0,x_um]),
                                            yaxis=dict(title=dict(text='y [micrometer]'),  range=[0,y_um]),
-                                           zaxis=dict(title=dict(text='Sputter time [s]'),range=[0,sputtertime]),),
+                                           zaxis=dict(title=dict(text='Sputter time [s]'),range=[sputtertime,0]),),
                                            width=700,margin=dict(r=20, b=10, l=10, t=10))
             
             ax_style = dict(showbackground =True,
@@ -759,7 +760,6 @@ else:
             fig.write_html(fs+"_ROI_3D_segment"+str(roi)+".html") #save 3d ROI plot
 
      
-       
 
    #%%
 ###### Depth profile ######
