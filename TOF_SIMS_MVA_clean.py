@@ -47,7 +47,8 @@ print(os.getcwd())
 #%% Parameters
 
 #Filepaths
-itmfile=""
+itmfile="D:\\orbi_processing\\OrbiVsTOF\\TOF\\P_Oregon.itm" #move to disk?
+#itmfile="D:/orbi_processing/OrbiVsTOF/TOF/N_cableBacteria for XPS.itm"
 grd_exe="C:/Program Files (x86)/ION-TOF/SurfaceLab 6/bin/ITRawExport.exe" #path to Grd executable 
 Output_folder=str(Path(basedir,Path(itmfile).stem))
 
@@ -64,8 +65,10 @@ cwt_w=10          #wavelet transform window
 
 #ROI
 ROI_peaks=1000
-ROI_clusters=2
+ROI_clusters=4
 ROI_dimensions=2
+ROI_bin_pixels=3
+ROI_bin_scans=5
 ROI_scaling="Jaccard"           # Options: False, "Poisson", "MinMax", "Standard", "Robust", "Jaccard"
 
 #depth profile
@@ -76,9 +79,9 @@ smoothing=False
 data_reduction="binning" #"binning" #or peak_picking
 
 #if binning
-bin_tof=5           # bins tof (mass)
-bin_pixels=3        # bins in 2 directions: 2->, 3->9 data reduction
-bin_scans=5         # bin scans
+MVA_bin_tof=5           # bins tof (mass)
+MVA_bin_pixels=3        # bins in 2 directions: 2->, 3->9 data reduction
+MVA_bin_scans=5         # bin scans
 min_count=2         # remove bins with les than x counts
 
 #MVA
@@ -125,6 +128,8 @@ if not hasattr(sys,'ps1'): #checks if code is executed from command line
     parser.add_argument("--ROI_peaks", required = False, default=1000, help="number of peaks considered for ROI detection")
     parser.add_argument("--ROI_dimensions", required = False, default=2, help="ROI dimensions (2 or 3")
     parser.add_argument("--ROI_scaling", required = False, default="Jaccard", help=' Options: False, "Poisson", "MinMax", "Standard", "Robust", "Jaccard"')
+    parser.add_argument("--ROI_bin_pixels", required = False, default=3, help='if binning: bin pixels in x & y direction')    
+    parser.add_argument("--ROI_bin_scans", required = False, default=5, help='if binning: bin frames (scans)')   
 
     #depth profile
     parser.add_argument("--normalize", required = False, default=False, help=' normalize depth profile to total count')
@@ -132,9 +137,9 @@ if not hasattr(sys,'ps1'): #checks if code is executed from command line
 
     #MVA data reduction
     parser.add_argument("--data_reduction", required = False, default="binning", help='MVA data reduction: "binning" or "peak_picking"')    
-    parser.add_argument("--bin_tof", required = False, default=5, help='if binning: bin tof channels')    
-    parser.add_argument("--bin_pixels", required = False, default=3, help='if binning: bin pixels in x & y direction')    
-    parser.add_argument("--bin_scans", required = False, default=5, help='if binning: bin frames (scans)')    
+    parser.add_argument("--MVA_bin_tof", required = False, default=5, help='if binning: bin tof channels')    
+    parser.add_argument("--MVA_bin_pixels", required = False, default=3, help='if binning: bin pixels in x & y direction')    
+    parser.add_argument("--MVA_bin_scans", required = False, default=5, help='if binning: bin frames (scans)')    
     parser.add_argument("--min_count", required = False, default=2, help='remove bins/peaks with fewer counts')    
     
     #MVA parameters
@@ -360,7 +365,17 @@ def pick_peaks(ds,
                plot_selected=False,
                plot_non_selected=False):
     
-
+    # ""+1
+    #%% test
+    
+    
+    # rel_height=0.5
+    # height_filter=0.1
+    
+    # extend_window=0
+    # cwt_w=10
+    # plot_selected=True
+    # plot_non_selected=True
 
     sSpectrum,c_smoothing_window=smooth_spectrum(ds)
 
@@ -522,6 +537,20 @@ meta_S=I.root.goto('Meta/Video Snapshot').dict_list()
 x_um,y_um=meta_S["fieldofview_x"]["float"]*10**6,meta_S["fieldofview_y"]["float"]*10**6 #in micrometers
 sputtertime=I.get_value("Measurement.SputterTime")["float"] #not sure if correct
 
+#for Mariya
+# import pySPM
+# import numpy as np
+
+# I=pySPM.ITM(itmfile)
+# np.array(I.get_meas_data("Measurement.SputterTime")) 
+# np.array(I.get_meas_data("Measurement.AcquisitionTime"))
+
+#%% To Do
+
+
+#use user supplied ROIs?
+#add optional calibrant txtfile?
+#ROI plot: check if rotation is correct
 
 #%%
 
@@ -590,23 +619,30 @@ else:
     if ROI_dimensions==2: gcols=["x","y"]
     if ROI_dimensions==3: gcols=["x","y","scan"]
     col="peak_bin"
-    cd=ds.groupby(gcols+[col]).size().to_frame("count").reset_index()
+    
+    #binning
+    rds=ds.copy()
+    if ROI_bin_pixels: rds[["x","y"]]=(rds[["x","y"]]/ROI_bin_pixels).astype(int)
+    if ROI_bin_scans: rds["scan"]=(rds["scan"]/ROI_bin_scans).astype(int) 
+    
+    cd=rds.groupby(gcols+[col]).size().to_frame("count").reset_index()
+    
+    #limit to x top peaks
     cds=cd.groupby("peak_bin")["count"].sum()
+    if len(cds)>ROI_peaks: cd=cd[cd["peak_bin"].isin(cds.sort_values().index[:ROI_peaks])] 
     
-    if len(cds)>ROI_peaks: cd=cd[cd["peak_bin"].isin(cds.sort_values().index[:ROI_peaks])] #limit to x top peaks
-    
+    #construct peak matrix
     ut=np.unique(cd[col])
     uz=np.zeros(cd[col].max()+1,dtype=np.uint32)
     uz[ut]=np.arange(len(ut))
-    
     xys=cd[gcols].values
     split_at=np.argwhere(np.any(np.diff(xys,axis=0)!=0,axis=1))[:,0]
-    
     sxys=np.vstack([xys[split_at],xys[-1]])
     sx=np.array_split(cd[[col,"count"]].values.astype(np.uint32),split_at+1)
     szm=np.zeros([len(sxys),len(ut)],dtype=bits(cd["count"].max()))  
     for ix,i in enumerate(sx): szm[ix,uz[i[:,0]]]=i[:,1]
     
+    #scaling
     if ROI_scaling=="Robust":   szm=robust_scale(szm,axis=0)
     if ROI_scaling=="Standard": szm=(szm-szm.mean(axis=0))/szm.std(axis=0) #z = (x - u) / s
     if ROI_scaling=="Poisson":  szm=szm/np.sqrt(szm.mean(axis=0))  #2D poisson scaling X/ sqrt mean  /np.sqrt(szm.mean(axis=1))/
@@ -618,16 +654,16 @@ else:
     szm[np.isnan(szm)]=0 #this doesnt work
     szm=csr_matrix(szm).T
     
-    
+    #Kmeans
     kmeans = KMeans(n_clusters=ROI_clusters, random_state=0, n_init="auto").fit(szm.T)
     rois=kmeans.labels_
     
     #map to space for indexing
     if ROI_dimensions==2: 
-        zroi=np.zeros([xpix,ypix],dtype=np.int8)
+        zroi=np.zeros([int(round(xpix/ROI_bin_pixels,0)),int(round(ypix/ROI_bin_pixels,0))],dtype=np.int8)
         zroi[sxys[:,0],sxys[:,1]]=rois
     if ROI_dimensions==3: 
-        zroi=np.zeros([xpix,ypix,scans],dtype=np.int8)
+        zroi=np.zeros([int(round(xpix/ROI_bin_pixels,0)),int(round(ypix/ROI_bin_pixels,0)),int(round(scans/ROI_bin_scans,0))],dtype=np.int8)
         zroi[sxys[:,0],sxys[:,1],sxys[:,2]]=rois
     
     np.save(fs+"_ROImap",zroi) #save ROI map
@@ -649,23 +685,90 @@ else:
     #plot 3D ROIs
     if ROI_dimensions==3:
         rdf=pd.DataFrame(np.hstack([sxys,rois.reshape(-1,1)]),columns=["x","y","z","r"])
+        
+        rdf["x"]=rdf["x"]*x_um/xpix*ROI_bin_pixels
+        rdf["y"]=rdf["y"]*y_um/ypix*ROI_bin_pixels
+        rdf["z"]=rdf["z"]*sputtertime/scans*ROI_bin_scans
         rdf["r"]=rdf["r"].astype(str)
-    
+        
+        #%%
+        
+        #plot all
         fig = px.scatter_3d(rdf, x='x', y='y', z='z',
                        color_discrete_sequence=px.colors.qualitative.Safe,        #Dark24/Vivid/Bold/Set1   
                       color='r', size_max=18,opacity=0.02) 
+        
+        fig.update_layout(scene = dict(xaxis=dict(title=dict(text='x [micrometer]')),
+                                       yaxis=dict(title=dict(text='y [micrometer]')),
+                                       zaxis=dict(title=dict(text='Sputter time [s]')),),
+                                       width=700,margin=dict(r=20, b=10, l=10, t=10))
+        
+        camera = dict(
+            up=dict(x=0, y=0, z=1),
+            center=dict(x=0, y=0, z=0),
+            eye=dict(x=1.65, y=1.25, z=1.55)
+        )
+
+
+        fig.update_layout(scene_camera=camera, title="ROI 3D combined segmentation")
+        
         fig.show()
-        fig.write_html(fs+"_ROI_3D.html") #save 3d ROI plot
-     
+        fig.write_html(fs+"_ROI_3D_combined.html") #save 3d ROI plot
     
+        #plot separate segments
+        for roi in range(ROI_clusters):
+            
+            d=rdf[rdf["r"]==str(roi)]
+            fig = go.Figure(data=[go.Scatter3d(x=d["x"], y=d["y"], z=d["z"],
+                                   mode='markers',opacity=0.02)])
+            
+            
+            fig.update_traces(marker=dict(line=dict(width=0),
+                              
+                                        color=px.colors.qualitative.Safe[roi])),
+                  
+            
+            fig.update_layout(scene = dict(xaxis=dict(title=dict(text='x [micrometer]'),  range=[0,x_um]),
+                                           yaxis=dict(title=dict(text='y [micrometer]'),  range=[0,y_um]),
+                                           zaxis=dict(title=dict(text='Sputter time [s]'),range=[0,sputtertime]),),
+                                           width=700,margin=dict(r=20, b=10, l=10, t=10))
+            
+            ax_style = dict(showbackground =True,
+                        backgroundcolor="white",
+                        showgrid=False,
+                        zeroline=False)
+        
+        
+        
+            fig.update_layout(template="none", width=600, height=600, font_size=11,
+                              scene=dict(xaxis=ax_style, 
+                                         yaxis=ax_style, 
+                                         zaxis=ax_style,
+                                         camera_eye=dict(x=1.85, y=1.85, z=1)))
+    
+            camera = dict(
+                up=dict(x=0, y=0, z=1),
+                center=dict(x=0, y=0, z=0),
+                eye=dict(x=1.65, y=1.25, z=1.55)
+            )
+    
+
+    
+            fig.update_layout(scene_camera=camera, title="ROI 3D segment "+str(roi))
+            
+            fig.show()
+            fig.write_html(fs+"_ROI_3D_segment"+str(roi)+".html") #save 3d ROI plot
+
+     
+       
 
    #%%
 ###### Depth profile ######
 
 #do depth profile per ROI
 if ROI_clusters:
-    if ROI_dimensions==2: ds["ROI"]=zroi[ds["x"],ds["y"]]            
-    if ROI_dimensions==3: ds["ROI"]=zroi[ds["x"],ds["y"],ds["scan"]] 
+    if ROI_dimensions==2: ds["ROI"]=zroi[ds["x"],ds["y"]]            #is this the right row column order?
+    if ROI_dimensions==3: ds["ROI"]=zroi[ds["x"],ds["y"],ds["scan"]] #is this the right row column order?
 else: ds["ROI"]=0
 cd=ds.groupby(["peak_bin","scan","ROI"]).size().to_frame("count").reset_index()
 
@@ -958,7 +1061,8 @@ for MVA_dimension in MVA_dimensions:
                     fig.update_layout(scene_camera=camera, title="Component: "+str(i+1))
                     
                     fig.show()
-                    fig.write_html(fs+"_"+MVA_method+"_3D_comp"+str(i)+"loading.html") 
+                    fig.write_html(fs+"_"+MVA_method+"_3D_comp"+str(i)+"loading.html") #save summed intensity 
+            
             
     
             
