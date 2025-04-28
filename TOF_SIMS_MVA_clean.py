@@ -655,7 +655,7 @@ else:
                        color_discrete_sequence=px.colors.qualitative.Safe,        #Dark24/Vivid/Bold/Set1   
                       color='r', size_max=18,opacity=0.02) 
         fig.show()
-        fig.write_html(fs+"_ROI_3D.html",dpi=300) #save 3d ROI plot
+        fig.write_html(fs+"_ROI_3D.html") #save 3d ROI plot
      
     
 
