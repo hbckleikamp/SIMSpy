@@ -47,8 +47,7 @@ print(os.getcwd())
 #%% Parameters
 
 #Filepaths
-itmfile="D:\\orbi_processing\\OrbiVsTOF\\TOF\\P_Oregon.itm" #move to disk?
-#itmfile="D:/orbi_processing/OrbiVsTOF/TOF/N_cableBacteria for XPS.itm"
+itmfile=""
 grd_exe="C:/Program Files (x86)/ION-TOF/SurfaceLab 6/bin/ITRawExport.exe" #path to Grd executable 
 Output_folder=str(Path(basedir,Path(itmfile).stem))
 
