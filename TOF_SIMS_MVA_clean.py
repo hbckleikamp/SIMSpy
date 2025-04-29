@@ -637,14 +637,16 @@ else:
     #scaling
     if ROI_scaling=="Robust":   szm=robust_scale(szm,axis=0)
     if ROI_scaling=="Standard": szm=(szm-szm.mean(axis=0))/szm.std(axis=0) #z = (x - u) / s
-    if ROI_scaling=="Poisson":  szm=szm/np.sqrt(szm.mean(axis=0))  #2D poisson scaling X/ sqrt mean  /np.sqrt(szm.mean(axis=1))/
     if ROI_scaling=="MinMax":   
         mins=(szm.max(axis=0)-szm.min(axis=0))
         mins[mins==0]=1 #avoid nan
         szm=(szm-szm.min(axis=0))/mins
-    if ROI_scaling=="Jaccard":  szm=szm.astype(bool).astype(int)
-    szm[np.isnan(szm)]=0 #this doesnt work
+        
     szm=csr_matrix(szm).T
+    if ROI_scaling=="Poisson":  szm=szm/np.sqrt(szm.mean(axis=0))  #2D poisson scaling X/ sqrt mean  /np.sqrt(szm.mean(axis=1))/
+    if ROI_scaling=="Jaccard":  szm=szm.astype(bool).astype(int)
+
+
     
     #Kmeans
     kmeans = KMeans(n_clusters=ROI_clusters, random_state=0, n_init="auto").fit(szm.T)
@@ -858,14 +860,15 @@ for MVA_dimension in MVA_dimensions:
         ### MVA Scaling 
         if MVA_scaling=="Standard": szm=(szm-szm.mean(axis=0))/szm.std(axis=0) #z = (x - u) / s
         if MVA_scaling=="Robust":   szm=robust_scale(szm,axis=0)
-        if MVA_scaling=="Poisson":  szm=szm/np.sqrt(szm.mean(axis=0))  #2D poisson scaling X/ sqrt mean  /np.sqrt(szm.mean(axis=1))
         if MVA_scaling=="MinMax":   
             mins=(szm.max(axis=0)-szm.min(axis=0))
             mins[mins==0]=1 #avoid nan
             szm=(szm-szm.min(axis=0))/mins
+        szm=csr_matrix(szm).T
+        if MVA_scaling=="Poisson":  szm=szm/np.sqrt(szm.mean(axis=0))  #2D poisson scaling X/ sqrt mean  /np.sqrt(szm.mean(axis=1))
         if MVA_scaling=="Jaccard":  szm=szm.astype(bool).astype(int)
         
-        szm=csr_matrix(szm).T
+        
     
         
         for MVA_method in MVA_methods:
