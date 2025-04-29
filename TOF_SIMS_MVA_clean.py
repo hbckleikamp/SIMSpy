@@ -65,9 +65,9 @@ cwt_w=10          #wavelet transform window
 #ROI
 ROI_peaks=1000
 ROI_clusters=4
-ROI_dimensions=2
-ROI_bin_pixels=3
-ROI_bin_scans=5
+ROI_dimensions=3
+ROI_bin_pixels=6
+ROI_bin_scans=1
 ROI_scaling="Jaccard"           # Options: False, "Poisson", "MinMax", "Standard", "Robust", "Jaccard"
 
 #depth profile
@@ -79,14 +79,14 @@ data_reduction="binning" #"binning" #or peak_picking
 
 #if binning
 MVA_bin_tof=5           # bins tof (mass)
-MVA_bin_pixels=3        # bins in 2 directions: 2->, 3->9 data reduction
-MVA_bin_scans=5         # bin scans
+MVA_bin_pixels=6       # bins in 2 directions: 2->, 3->9 data reduction
+MVA_bin_scans=1         # bin scans
 min_count=2         # remove bins with les than x counts
 
 #MVA
-MVA_dimensions=3
+MVA_dimensions=[1,2,3]
 n_components=5          # number of components
-MVA_methods="NMF"
+MVA_methods=["NMF","PCA"]
 MVA_scaling="MinMax"    # Options: False, "Poisson", "MinMax", "Standard", "Robust", "Jaccard"
 
 Top_quantile=0.25 #False      # [0-1, float] only retain mass channels that have top X abundance quantile 
@@ -532,8 +532,11 @@ k0,sf=I.k0,I.sf
 mode_sign={"positive":"+","negative":"-"}.get((I.polarity).lower())
 calibrants=np.sort(np.array([pySPM.utils.get_mass(i) for i in Calibrants if i.endswith(mode_sign)])) #shortended calibrants list
 
-meta_S=I.root.goto('Meta/Video Snapshot').dict_list()
-x_um,y_um=meta_S["fieldofview_x"]["float"]*10**6,meta_S["fieldofview_y"]["float"]*10**6 #in micrometers
+# meta_S=I.root.goto('Meta/Video Snapshot').dict_list()
+# x_um,y_um=meta_S["fieldofview_x"]["float"]*10**6,meta_S["fieldofview_y"]["float"]*10**6 #in micrometers
+
+x_um,y_um=I.size["real"]["x"]*1e6,I.size["real"]["y"]*1e6
+
 sputtertime=I.get_value("Measurement.SputterTime")["float"] #not sure if correct
 
 
@@ -598,9 +601,6 @@ ds["peak_bin"]=p[pmat[ds["tof"]],0]
 
 
 
-
-
-
 #%%
 
 ###### ROI detection #####
@@ -637,16 +637,14 @@ else:
     #scaling
     if ROI_scaling=="Robust":   szm=robust_scale(szm,axis=0)
     if ROI_scaling=="Standard": szm=(szm-szm.mean(axis=0))/szm.std(axis=0) #z = (x - u) / s
+    if ROI_scaling=="Poisson":  szm=szm/np.sqrt(szm.mean(axis=0))  #2D poisson scaling X/ sqrt mean  /np.sqrt(szm.mean(axis=1))/
     if ROI_scaling=="MinMax":   
         mins=(szm.max(axis=0)-szm.min(axis=0))
         mins[mins==0]=1 #avoid nan
         szm=(szm-szm.min(axis=0))/mins
-        
-    szm=csr_matrix(szm).T
-    if ROI_scaling=="Poisson":  szm=szm/np.sqrt(szm.mean(axis=0))  #2D poisson scaling X/ sqrt mean  /np.sqrt(szm.mean(axis=1))/
     if ROI_scaling=="Jaccard":  szm=szm.astype(bool).astype(int)
-
-
+    szm[np.isnan(szm)]=0 #this doesnt work
+    szm=csr_matrix(szm).T
     
     #Kmeans
     kmeans = KMeans(n_clusters=ROI_clusters, random_state=0, n_init="auto").fit(szm.T)
@@ -654,18 +652,20 @@ else:
     
     #map to space for indexing
     if ROI_dimensions==2: 
-        zroi=np.zeros([int(round(xpix/ROI_bin_pixels,0)),int(round(ypix/ROI_bin_pixels,0))],dtype=np.int8)
+        zroi=np.zeros([math.ceil(xpix/ROI_bin_pixels),math.ceil(ypix/ROI_bin_pixels)],dtype=np.int8)
         zroi[sxys[:,0],sxys[:,1]]=rois
     if ROI_dimensions==3: 
-        zroi=np.zeros([int(round(xpix/ROI_bin_pixels,0)),int(round(ypix/ROI_bin_pixels,0)),int(round(scans/ROI_bin_scans,0))],dtype=np.int8)
+        zroi=np.zeros([math.ceil(xpix/ROI_bin_pixels),math.ceil(ypix/ROI_bin_pixels),math.ceil(scans/ROI_bin_scans)],dtype=np.int8)
         zroi[sxys[:,0],sxys[:,1],sxys[:,2]]=rois
+ 
+    
     
     np.save(fs+"_ROImap",zroi) #save ROI map
     
     #plot 2D ROIs
     if ROI_dimensions==2:
         fig,ax=plt.subplots()
-        g=sns.heatmap(rois.reshape(int(round(xpix/ROI_bin_pixels,0)),int(round(ypix/ROI_bin_pixels,0))).T)
+        g=sns.heatmap(rois.reshape(math.ceil(xpix/ROI_bin_pixels),math.ceil(ypix/ROI_bin_pixels)).T)
         
         #update to pixels to micrometers
         ax.set_yticklabels((np.linspace(0,y_um,len(g.get_yticks()))).astype(int),rotation=0)
@@ -688,12 +688,12 @@ else:
      
         
         #plot all
-        fig = px.scatter_3d(rdf, x='x', y='y', z='z',
+        fig = px.scatter_3d(rdf, y='x', x='y', z='z',
                        color_discrete_sequence=px.colors.qualitative.Safe,        #Dark24/Vivid/Bold/Set1   
                       color='r', size_max=18,opacity=0.02) 
         
-        fig.update_layout(scene = dict(xaxis=dict(title=dict(text='x [micrometer]')),
-                                       yaxis=dict(title=dict(text='y [micrometer]')),
+        fig.update_layout(scene = dict(xaxis=dict(title=dict(text='y [micrometer]')),
+                                       yaxis=dict(title=dict(text='x [micrometer]')),
                                        zaxis=dict(title=dict(text='Sputter time [s]')),),
                                        width=700,margin=dict(r=20, b=10, l=10, t=10))
         
@@ -703,6 +703,18 @@ else:
             eye=dict(x=1.65, y=1.25, z=1.55)
         )
 
+        ax_style = dict(showbackground =True,
+                    backgroundcolor="white",
+                    showgrid=False,
+                    zeroline=False)
+    
+
+        fig.update_layout(template="none", width=600, height=600, font_size=11,
+                          scene=dict(xaxis=ax_style, 
+                                     yaxis=ax_style, 
+                                     zaxis=ax_style,
+                                     camera_eye=dict(x=1.85, y=1.85, z=1)))
+            
         fig.update_scenes(zaxis_autorange="reversed")
         fig.update_layout(scene_camera=camera, title="ROI 3D combined segmentation")
         
@@ -711,20 +723,21 @@ else:
     
         #plot separate segments
         #%%
-        for roi in range(ROI_clusters):
+        roi_reorder=rdf["r"].drop_duplicates().values.astype(int)
+        for ix_roi,roi in enumerate(roi_reorder):
             
             d=rdf[rdf["r"]==str(roi)]
-            fig = go.Figure(data=[go.Scatter3d(x=d["x"], y=d["y"], z=d["z"],
+            fig = go.Figure(data=[go.Scatter3d(x=d["y"], y=d["x"], z=d["z"],
                                    mode='markers',opacity=0.02)])
             
             
             fig.update_traces(marker=dict(line=dict(width=0),
                               
-                                        color=px.colors.qualitative.Safe[roi])),
+                                        color=px.colors.qualitative.Safe[ix_roi])),
                   
 
-            fig.update_layout(scene = dict(xaxis=dict(title=dict(text='x [micrometer]'),  range=[0,x_um]),
-                                           yaxis=dict(title=dict(text='y [micrometer]'),  range=[0,y_um]),
+            fig.update_layout(scene = dict(xaxis=dict(title=dict(text='y [micrometer]'),  range=[0,x_um]),
+                                           yaxis=dict(title=dict(text='x [micrometer]'),  range=[0,y_um]),
                                            zaxis=dict(title=dict(text='Sputter time [s]'),range=[sputtertime,0]),),
                                            width=700,margin=dict(r=20, b=10, l=10, t=10))
             
@@ -754,15 +767,18 @@ else:
             fig.show()
             fig.write_html(fs+"_ROI_3D_segment"+str(roi)+".html") #save 3d ROI plot
 
-     
+        
 
    #%%
 ###### Depth profile ######
 
 #do depth profile per ROI
 if ROI_clusters:
-    if ROI_dimensions==2: ds["ROI"]=zroi[ds["x"],ds["y"]]            #is this the right row column order?
-    if ROI_dimensions==3: ds["ROI"]=zroi[ds["x"],ds["y"],ds["scan"]] #is this the right row column order?
+    if ROI_dimensions==2: ds["ROI"]=zroi[(ds["x"]/ROI_bin_pixels).astype(int),
+                                         (ds["y"]/ROI_bin_pixels).astype(int)]            #is this the right row column order?
+    if ROI_dimensions==3: ds["ROI"]=zroi[(ds["x"]/ROI_bin_pixels).astype(int),
+                                         (ds["y"]/ROI_bin_pixels).astype(int),
+                                         (ds["scan"]/ROI_bin_scans).astype(int)] #is this the right row column order?
 else: ds["ROI"]=0
 cd=ds.groupby(["peak_bin","scan","ROI"]).size().to_frame("count").reset_index()
 
@@ -797,11 +813,11 @@ if data_reduction=="peak_picking":
     bin_tof,bin_pixels,bin_scans=1,1,1 #turn off binning
 
 #binning
-ds["tof"]=  (ds["tof"] /bin_tof   ).astype(int) 
-ds[["x","y"]]=(ds[["x","y"]]/bin_pixels).astype(int)
-ds["scan"]=  (ds["scan"] /bin_scans   ).astype(int) 
+ds["tof"]=  (ds["tof"] /MVA_bin_tof   ).astype(int) 
+ds[["x","y"]]=(ds[["x","y"]]/MVA_bin_pixels).astype(int)
+ds["scan"]=  (ds["scan"] /MVA_bin_scans   ).astype(int) 
 ds=ds.astype(np.uint32)
-xpix,ypix,scans= xpix/bin_pixels,ypix/bin_pixels,scans/bin_scans
+xpix,ypix,scans= xpix/MVA_bin_pixels,ypix/MVA_bin_pixels,scans/MVA_bin_scans
 
 
 ###### Create peak matrix #####
@@ -827,239 +843,233 @@ for MVA_dimension in MVA_dimensions:
         
         cd=ds[ds["ROI"]==roi].groupby(gcols+[col]).size().to_frame("count").reset_index()
         
-        #min count filtering
-        q75=np.quantile(cd["count"],0.75)
-        if q75>min_count: cd=cd[cd["count"]>=min_count]
-        else: print("Minimum count too high, skipping filtering!")        
+        if len(cd):
+            #min count filtering
+            q75=np.quantile(cd["count"],0.75)
+            if q75>min_count: cd=cd[cd["count"]>=min_count]
+            else: print("Minimum count too high, skipping filtering!")        
+                
             
-        
+                
             
-        
-        ut=np.unique(cd[col])
-        uz=np.zeros(cd[col].max()+1,dtype=np.uint32)
-        uz[ut]=np.arange(len(ut))
-        
-        xys=cd[gcols].values
-        split_at=np.argwhere(np.any(np.diff(xys,axis=0)!=0,axis=1))[:,0]
-        
-        sxys=np.vstack([xys[split_at],xys[-1]])
-        sx=np.array_split(cd[[col,"count"]].values.astype(np.uint32),split_at+1)
-        szm=np.zeros([len(sxys),len(ut)],dtype=bits(cd["count"].max()))  
-        for ix,i in enumerate(sx): szm[ix,uz[i[:,0]]]=i[:,1]
+            ut=np.unique(cd[col])
+            uz=np.zeros(cd[col].max()+1,dtype=np.uint32)
+            uz[ut]=np.arange(len(ut))
             
-        if  Top_quantile: #only keep top abundant  
-            szm[:,np.argwhere(szm.mean(axis=0)<np.quantile(szm.mean(axis=0),Top_quantile))]=0 
-        
-        if Remove_zeros: 
-            q=szm.sum(axis=0)>0 
-            ut=ut[q]
-            szm=szm[:,q]
-           
-        if szm.shape[0]<n_components: n_components=szm.shape[0] 
-           
-        ### MVA Scaling 
-        if MVA_scaling=="Standard": szm=(szm-szm.mean(axis=0))/szm.std(axis=0) #z = (x - u) / s
-        if MVA_scaling=="Robust":   szm=robust_scale(szm,axis=0)
-        if MVA_scaling=="MinMax":   
-            mins=(szm.max(axis=0)-szm.min(axis=0))
-            mins[mins==0]=1 #avoid nan
-            szm=(szm-szm.min(axis=0))/mins
-        szm=csr_matrix(szm).T
-        if MVA_scaling=="Poisson":  szm=szm/np.sqrt(szm.mean(axis=0))  #2D poisson scaling X/ sqrt mean  /np.sqrt(szm.mean(axis=1))
-        if MVA_scaling=="Jaccard":  szm=szm.astype(bool).astype(int)
-        
-        
-    
-        
-        for MVA_method in MVA_methods:
+            xys=cd[gcols].values
+            split_at=np.argwhere(np.any(np.diff(xys,axis=0)!=0,axis=1))[:,0]
+            
+            sxys=np.vstack([xys[split_at],xys[-1]])
+            sx=np.array_split(cd[[col,"count"]].values.astype(np.uint32),split_at+1)
+            szm=np.zeros([len(sxys),len(ut)],dtype=bits(cd["count"].max()))  
+            for ix,i in enumerate(sx): szm[ix,uz[i[:,0]]]=i[:,1]
+                
+            if  Top_quantile: #only keep top abundant  
+                szm[:,np.argwhere(szm.mean(axis=0)<np.quantile(szm.mean(axis=0),Top_quantile))]=0 
+            
+            if Remove_zeros: 
+                q=szm.sum(axis=0)>0 
+                ut=ut[q]
+                szm=szm[:,q]
                
-            if MVA_method=="NMF":
-                model = NMF(n_components=n_components, init=NMF_algorithm, random_state=0, verbose=True,max_iter=20000)
-                MVA = model.fit_transform(szm)
-                loadings=model.components_
-                
-            if MVA_method=="PCA":
-                clf = TruncatedSVD(n_components=n_components,algorithm=PCA_algorithm) #random is fast, arpack is more accurate
-                MVA = clf.fit_transform(szm.astype(float))
-                if Varimax: MVA =varimax(MVA)
-                loadings=clf.components_* np.sqrt(clf.explained_variance_).reshape(-1,1)
-        
-    
-            ldf=pd.DataFrame(np.hstack([sxys,loadings.T]),columns=gcols+np.arange(n_components).tolist())
-            mdf=pd.DataFrame(np.hstack([c2m(ut*bin_tof,sf,k0).reshape(-1,1),MVA]),columns=["mass"]+np.arange(n_components).tolist())
-            
-            if ROI_clusters>1: #save with ROI
-                ldf.to_csv(fs+"_ROI"+str(roi)+"_"+str(MVA_dimension)+"D_"+MVA_method+"_loadings.csv")
-                mdf.to_csv(fs+"_ROI"+str(roi)+"_"+str(MVA_dimension)+"D_"+MVA_method+"_components.csv") 
-            else:
-                ldf.to_csv(fs+"_"+str(MVA_dimension)+"D_"+MVA_method+"_loadings.csv")
-                mdf.to_csv(fs+"_"+str(MVA_dimension)+"D_"+MVA_method+"_components.csv")
-            
-              #%%
-                
-            ### plot mass loadings
-            rows,cols=n_components//5,5
-            if n_components%5: rows+=1
-            if cols>n_components: cols=n_components
-            
-            fig,axes=plt.subplots(rows,cols,figsize=(cols*4,rows*4))
-            axes = axes.flatten()
-            for i in range(n_components):
-                axes[i].plot(c2m(ut*bin_tof,sf,k0),MVA[:,i])
-            
-            for ix,i in enumerate(axes):
-                i.title.set_text(ix+1)
-            
-            if ROI_clusters>1: fig.savefig(fs+"_ROI"+str(roi)+"_"+str(MVA_dimension)+"D_"+MVA_method+"_components.png",dpi=300) #save summed intensity png
-            else:              fig.savefig(fs+"_"+str(MVA_dimension)+"D_"+MVA_method+"_components.png",dpi=300) #save summed intensity png     
-                
-            ###### Spatial plots
-            
-        
-      
-            #%% Plot 1D
-            
-            if MVA_dimension==1:
-                
-                rows,cols=n_components//5,5
-                if n_components%5: rows+=1
-                if cols>n_components: cols=n_components
-                
-                fig,axes=plt.subplots(rows,cols,figsize=(cols*4,rows*4))
-                axes = axes.flatten()
-                for i in range(n_components):
-                    
-                    axes[i].plot(sxys*sputtertime/scans,loadings[i,:])
-                    
-                    
-                for ix,i in enumerate(axes):
-                    i.title.set_text(ix+1)
-                    
-                fig.supylabel('Loading')
-                fig.supxlabel('Sputter time [s]')
-                
-                if ROI_clusters>1: fig.savefig(fs+"_ROI"+str(roi)+"_"+MVA_method+"_1D_loadings.png",dpi=300) #save summed intensity png
-                else:              fig.savefig(fs+"_"+MVA_method+"_1D_loadings.png",dpi=300) #save summed intensity png
-                
-                #pils save plot (add ROI incase ROI clusters)
-            
-            #%% Plot 2D
-            
-            if MVA_dimension==2:
-            
-                rows,cols=n_components//5,5
-                if n_components%5: rows+=1
-                if cols>n_components: cols=n_components
-                
-                fig,axes=plt.subplots(rows,cols,figsize=(cols*4,rows*4))
-                axes = axes.flatten()
-                for i in range(n_components):
-                    
-                    hm=pd.DataFrame(np.hstack([sxys,loadings[i,:].reshape(-1,1)]),columns=["x","y","c"]).pivot(columns="x",index="y").fillna(0)
-                    hm.columns = hm.columns.droplevel().astype(int)
-                    hm.index=hm.index.astype(int)
-                    
-                    g=sns.heatmap(hm,ax=axes[i],cbar=False,center=0,robust=True)
-                    
-                    #update to pixels to micrometers
-                    axes[i].set_yticklabels((np.linspace(0,y_um,len(g.get_yticks()))).astype(int),rotation=0)
-                    if ix: axes[i].set_ylabel(r'y $\mu$m') #prevent bleed
-                    
-                    axes[i].set_xticklabels((np.linspace(0,x_um,len(g.get_xticks()))).astype(int),rotation=90)
-                    axes[i].set_xlabel(r'x $\mu$m')
-                    
-                for ix,i in enumerate(axes):
-                    i.title.set_text(ix+1)
-                
-                fig.savefig(fs+"_"+MVA_method+"_2D_loadings.png",dpi=300) #save summed intensity png
-            
-            
-            #%% Plot 3D
-            
-            if MVA_dimension==3:
-            
-            
-                #### Surface plot
-                
-                for i in range(n_components):
+            if szm.shape[0]<n_components: n_components=szm.shape[0] 
                
-                    vdf=pd.DataFrame(np.vstack([sxys.T,loadings[i,:].reshape(1,-1)]).T,columns=["x","y","scan","counts"])
-                
-                    X,Y,Z=np.meshgrid(np.arange(xpix), np.arange(ypix),np.arange(scans))
-                    vm=np.zeros([int(np.round(xpix,0)),int(np.round(ypix,0)),int(np.round(scans,0))])
-                    vm[vdf["x"].astype(int).tolist(),vdf["y"].astype(int).tolist(),vdf["scan"].astype(int).tolist()]=vdf["counts"].values
+            ### MVA Scaling 
+            if MVA_scaling=="Standard": szm=(szm-szm.mean(axis=0))/szm.std(axis=0) #z = (x - u) / s
+            if MVA_scaling=="Robust":   szm=robust_scale(szm,axis=0)
+            if MVA_scaling=="Poisson":  szm=szm/np.sqrt(szm.mean(axis=0))  #2D poisson scaling X/ sqrt mean  /np.sqrt(szm.mean(axis=1))
+            if MVA_scaling=="MinMax":   
+                mins=(szm.max(axis=0)-szm.min(axis=0))
+                mins[mins==0]=1 #avoid nan
+                szm=(szm-szm.min(axis=0))/mins
+            if MVA_scaling=="Jaccard":  szm=szm.astype(bool).astype(int)
             
-                    
-                    x,y,z,v=X.flatten(),Y.flatten(),Z.flatten(),vm.flatten()
-                    
-                    x,y=x*x_um/xpix,y*y_um/ypix #convert to micrometer
-                    z=z*sputtertime/scans       #convert to sputter time in seconds
+            szm=csr_matrix(szm).T
+        
+            
+            for MVA_method in MVA_methods:
                    
-                    #here you can interpolate more points for the volume plot if needed
-                    #https://docs.scipy.org/doc/scipy/reference/generated/scipy.interpolate.griddata.html            
+                if MVA_method=="NMF":
+                    model = NMF(n_components=n_components, init=NMF_algorithm, random_state=0, verbose=True,max_iter=20000)
+                    MVA = model.fit_transform(szm)
+                    loadings=model.components_
                     
-                    fig = go.Figure(data=go.Volume(
-                        x=x, y=y, z=z, value=v, 
-                        
-                        # isomin=0.1,
-                        # isomax=0.8,
-                        opacity=0.6, # needs to be small to see through all surfaces
-                        surface_count=10, # needs to be a large number for good volume rendering
-                        
-                        
-                        
-                        ))
-                    fig.update_scenes(zaxis_autorange="reversed")
+                if MVA_method=="PCA":
+                    clf = TruncatedSVD(n_components=n_components,algorithm=PCA_algorithm) #random is fast, arpack is more accurate
+                    MVA = clf.fit_transform(szm.astype(float))
+                    if Varimax: MVA =varimax(MVA)
+                    loadings=clf.components_* np.sqrt(clf.explained_variance_).reshape(-1,1)
+            
+        
+                ldf=pd.DataFrame(np.hstack([sxys,loadings.T]),columns=gcols+np.arange(n_components).tolist())
+                mdf=pd.DataFrame(np.hstack([c2m(ut*MVA_bin_tof,sf,k0).reshape(-1,1),MVA]),columns=["mass"]+np.arange(n_components).tolist())
+                
+                if ROI_clusters>1: #save with ROI
+                    ldf.to_csv(fs+"_ROI"+str(roi)+"_"+str(MVA_dimension)+"D_"+MVA_method+"_loadings.csv")
+                    mdf.to_csv(fs+"_ROI"+str(roi)+"_"+str(MVA_dimension)+"D_"+MVA_method+"_components.csv") 
+                else:
+                    ldf.to_csv(fs+"_"+str(MVA_dimension)+"D_"+MVA_method+"_loadings.csv")
+                    mdf.to_csv(fs+"_"+str(MVA_dimension)+"D_"+MVA_method+"_components.csv")
+                
+                  #%%
                     
+                ### plot mass loadings
+                rows,cols=n_components//5,5
+                if n_components%5: rows+=1
+                if cols>n_components: cols=n_components
+                
+                fig,axes=plt.subplots(rows,cols,figsize=(cols*4,rows*4))
+                axes = axes.flatten()
+                for i in range(n_components):
+                    axes[i].plot(c2m(ut*MVA_bin_tof,sf,k0),MVA[:,i])
+                
+                for ix,i in enumerate(axes):
+                    i.title.set_text(ix+1)
+                
+                if ROI_clusters>1: fig.savefig(fs+"_ROI"+str(roi)+"_"+str(MVA_dimension)+"D_"+MVA_method+"_components.png",dpi=300) #save summed intensity png
+                else:              fig.savefig(fs+"_"+str(MVA_dimension)+"D_"+MVA_method+"_components.png",dpi=300) #save summed intensity png     
                     
-                    ax_style = dict(showbackground =True,
-                                backgroundcolor="rgb(240, 240, 240)",
-                                showgrid=False,
-                                zeroline=False)
+                ###### Spatial plots
+                
+            
+          
+                #%% Plot 1D
+                
+                if MVA_dimension==1:
+                    
+                    rows,cols=n_components//5,5
+                    if n_components%5: rows+=1
+                    if cols>n_components: cols=n_components
+                    
+                    fig,axes=plt.subplots(rows,cols,figsize=(cols*4,rows*4))
+                    axes = axes.flatten()
+                    for i in range(n_components):
+                        
+                        axes[i].plot(sxys*sputtertime/scans,loadings[i,:])
+                        
+                        
+                    for ix,i in enumerate(axes):
+                        i.title.set_text(ix+1)
+                        
+                    fig.supylabel('Loading')
+                    fig.supxlabel('Sputter time [s]')
+                    
+                    if ROI_clusters>1: fig.savefig(fs+"_ROI"+str(roi)+"_"+MVA_method+"_1D_loadings.png",dpi=300) #save summed intensity png
+                    else:              fig.savefig(fs+"_"+MVA_method+"_1D_loadings.png",dpi=300) #save summed intensity png
+                    
+                    #pils save plot (add ROI incase ROI clusters)
+                
+                #%% Plot 2D
+                
+                if MVA_dimension==2:
+                
+                    rows,cols=n_components//5,5
+                    if n_components%5: rows+=1
+                    if cols>n_components: cols=n_components
+                    
+                    fig,axes=plt.subplots(rows,cols,figsize=(cols*4,rows*4))
+                    axes = axes.flatten()
+                    for i in range(n_components):
+                        
+                        hm=pd.DataFrame(np.hstack([sxys,loadings[i,:].reshape(-1,1)]),columns=["x","y","c"]).pivot(columns="x",index="y").fillna(0)
+                        hm.columns = hm.columns.droplevel().astype(int)
+                        hm.index=hm.index.astype(int)
+                        
+                        g=sns.heatmap(hm,ax=axes[i],cbar=False,center=0,robust=True)
+                        
+                        #update to pixels to micrometers
+                        axes[i].set_yticklabels((np.linspace(0,y_um,len(g.get_yticks()))).astype(int),rotation=0)
+                        if ix: axes[i].set_ylabel(r'y $\mu$m') 
+                        else:  axes[i].set_ylabel('') #prevent bleed
+                        
+                        axes[i].set_xticklabels((np.linspace(0,x_um,len(g.get_xticks()))).astype(int),rotation=90)
+                        axes[i].set_xlabel(r'x $\mu$m')
+                        
+                    for ix,i in enumerate(axes):
+                        i.title.set_text(ix+1)
+                    
+                    fig.savefig(fs+"_"+MVA_method+"_2D_loadings.png",dpi=300) #save summed intensity png
                 
                 
+                #%% Plot 3D
                 
-                    fig.update_layout(template="none", width=600, height=600, font_size=11,
-                                      scene=dict(xaxis=ax_style, 
-                                                 yaxis=ax_style, 
-                                                 zaxis=ax_style,
-                                                 camera_eye=dict(x=1.85, y=1.85, z=1)))
+                if MVA_dimension==3:
+                
+     
+                    cmax=max(loadings.max(),abs(loadings.min()))
+                    #### Surface plot
                     
+                    for i in range(n_components):
+                   
+                        vdf=pd.DataFrame(np.vstack([sxys.T,loadings[i,:].reshape(1,-1)]).T,columns=["x","y","scan","counts"])
                     
-                    fig.update_layout(scene = dict(
-                              xaxis=dict(
-                                  title=dict(
-                                      text='x [micrometer]'
-                                  )
-                              ),
-                              yaxis=dict(
-                                  title=dict(
-                                      text='y [micrometer]'
-                                  )
-                              ),
-                              zaxis=dict(
-                                  title=dict(
-                                      text='Sputter time [s]'
-                                  )
-                              ),
-                            ),
-                            width=700,
-                            margin=dict(r=20, b=10, l=10, t=10))
+                        X,Y,Z=np.meshgrid(np.arange(math.ceil(xpix)), np.arange(math.ceil(ypix)),np.arange(math.ceil(scans)))
+                        vm=np.zeros([math.ceil(xpix),math.ceil(ypix),math.ceil(scans)])
+                        vm[vdf["x"].astype(int).tolist(),vdf["y"].astype(int).tolist(),vdf["scan"].astype(int).tolist()]=vdf["counts"].values
+                
                         
-                    camera = dict(
-                        up=dict(x=0, y=0, z=1),
-                        center=dict(x=0, y=0, z=0),
-                        eye=dict(x=1.65, y=1.25, z=1.55)
-                    )
-            
-            
-                    fig.update_layout(scene_camera=camera, title="Component: "+str(i+1))
+                        x,y,z,v=X.flatten(),Y.flatten(),Z.flatten(),vm.flatten()
+                        
+                        #remove background points
+                        q=np.argwhere(abs(v)>=(np.quantile(abs(v),0.90)/10))
+          
+                        
+                        
+                        
+                        x,y=x*x_um/xpix,y*y_um/ypix #convert to micrometer
+                        z=z*sputtertime/scans       #convert to sputter time in seconds
+                       
+                        #here you can interpolate more points for the volume plot if needed
+                        #https://docs.scipy.org/doc/scipy/reference/generated/scipy.interpolate.griddata.html            
+                        
+                        fig = go.Figure(data=go.Volume(
+                            x=x, y=y, z=z, value=v, 
+                           
+                            cmax=cmax*0.75,
+                            cmin=-cmax*0.75,
+                            cmid=0,
+                            opacity=0.2, # needs to be small to see through all surfaces
+                            surface_count=5, # needs to be a large number for good volume rendering
+                            
+                            
+                            
+                            ))
+                        fig.update_scenes(zaxis_autorange="reversed")
+                        
+                        
+                        ax_style = dict(showbackground =True,
+                                    backgroundcolor="white",
+                                    showgrid=False,
+                                    zeroline=False)
                     
-                    fig.show()
-                    fig.write_html(fs+"_"+MVA_method+"_3D_comp"+str(i)+"loading.html") #save summed intensity 
-            
-            
-    
+                    
+                    
+                        fig.update_layout(template="none", width=600, height=600, font_size=11,
+                                          scene=dict(xaxis=ax_style, 
+                                                     yaxis=ax_style, 
+                                                     zaxis=ax_style,
+                                                     camera_eye=dict(x=1.85, y=1.85, z=1)))
+                        
+                        
+                        fig.update_layout(scene = dict(
+                                  xaxis=dict(title=dict(text='y [micrometer]')),
+                                  yaxis=dict(title=dict(text='x [micrometer]')),
+                                  zaxis=dict(title=dict(text='Sputter time [s]')),),
+                                width=700,margin=dict(r=20, b=10, l=10, t=10))
+                            
+                        camera = dict(
+                            up=dict(x=0, y=0, z=1),
+                            center=dict(x=0, y=0, z=0),
+                            eye=dict(x=1.65, y=1.25, z=1.55)
+                        )
+                
+                
+                        fig.update_layout(scene_camera=camera, title="Component: "+str(i+1))
+                        
+                        fig.show()
+                        fig.write_html(fs+"_"+MVA_method+"_3D_comp"+str(i)+"loading.html") #save summed intensity 
+                
+                
             
        
    
