@@ -536,13 +536,6 @@ meta_S=I.root.goto('Meta/Video Snapshot').dict_list()
 x_um,y_um=meta_S["fieldofview_x"]["float"]*10**6,meta_S["fieldofview_y"]["float"]*10**6 #in micrometers
 sputtertime=I.get_value("Measurement.SputterTime")["float"] #not sure if correct
 
-#for Mariya
-# import pySPM
-# import numpy as np
-
-# I=pySPM.ITM(itmfile)
-# np.array(I.get_meas_data("Measurement.SputterTime")) 
-# np.array(I.get_meas_data("Measurement.AcquisitionTime"))
 
 #%% To Do
 
