@@ -19,22 +19,27 @@ import math
 import numpy as np
 import pandas as pd
 
-import statsmodels.api as sm
-from scipy.optimize import least_squares
+
+from scipy.optimize import curve_fit
 from scipy.signal import find_peaks,find_peaks_cwt,  savgol_filter
 from sklearn.preprocessing import robust_scale
 from scipy.sparse import csr_matrix 
+
+
+from sklearn.decomposition import PCA
 from sklearn.decomposition import TruncatedSVD
 from sklearn.decomposition import NMF
 from sklearn.cluster import KMeans
 
 #plotting 
+import textalloc as ta
 import matplotlib.pyplot as plt
 import seaborn as sns
 import plotly.express as px
 import plotly.graph_objects as go
 import plotly.io as pio
 pio.renderers.default='browser'
+
 
 
 # %% change directory to script directory (should work on windows and mac)
