@@ -267,73 +267,78 @@ def CalibrateGlobal(channels,calibrants,sf,k0,
                     ppm_cal=2000,
                     min_mass=10,
                     plot=True):
-
+   
         try: 
+            # #test
+            # sf,k0=I.sf,I.k0
+            # channels=centroids
+            # ppm_cal=2000
+            # min_mass=10
+            # plot=True
+#%%
 
+            #get calibrants
             fcalibrants=calibrants[calibrants>min_mass]
             channels=np.sort(channels)
             mp=c2m(channels,sf,k0)
             q1=find_closest(mp,fcalibrants)
             mp=mp[q1]
         
-            #get calibrants
             ppms=abs((fcalibrants-mp.reshape(-1,1))/mp.reshape(-1,1))*1e6
             q=np.argwhere(ppms<=ppm_cal)
             qmp=mp[q[:,0]]
             qcal=fcalibrants[q[:,1]]
             ppm=(qmp-qcal)/qcal*1e6
-     
-            # denoise calibrants with quantile
-            dpp=pd.DataFrame(list(zip(qcal,qmp,channels[q1[q[:,0]]],ppm)),columns=["mass_q","mass_t","channel_t","ppm"])
-            dpp["zppm"]=dpp["ppm"]-dpp["ppm"].median()
-            q1,q3=np.percentile(dpp.zppm,25),np.percentile(dpp.zppm,75) 
-            fdpp=dpp[(dpp.zppm<q3+1.5*(q3-q1)) & (dpp.zppm>q3-1.5*(q3-q1))]
             
-            #lowess regression
-            lowess = sm.nonparametric.lowess(fdpp.ppm, fdpp.mass_q, frac=.3)
-            y,ppm=lowess[:,0],lowess[:,1]
-            x=m2c(y*(1+ppm/1e6),sf,k0)
-           
-            #fitting 
-            sf,k0 = least_squares(residual, [sf,k0], args=(x, y), method='lm',jac='2-point',max_nfev=3000).x 
-
-    
+            
+            #1st calibration    
+            x,y=channels[q1[q[:,0]]],qcal
+            [sf,k0], _ = curve_fit(c2m,x,y,p0=[sf,k0])
+            post_ppms=(c2m(x,sf,k0)-y)/y*1e6
+            
+            #filter calibrants
+            pm=post_ppms-np.median(post_ppms)
+            q1,q3=np.percentile(pm,25),np.percentile(pm,75) 
+            q=(pm<q3+1.5*(q3-q1)) & (pm>q3-1.5*(q3-q1))
+            
+            #2nd calibration
+            [sf,k0], _ = curve_fit(c2m,x[q],y[q],p0=[sf,k0])
+            post_ppms2=(c2m(x[q],sf,k0)-y[q])/y[q]*1e6
+            
             if plot:
                 
-                pre_ppms=fdpp.ppm
-                post_ppms=(c2m(fdpp.channel_t,sf,k0)-fdpp.mass_q)/fdpp.mass_q*1e6
-                pret=str(round(sum(abs(pre_ppms))/len(pre_ppms),1))
-                postt=str(round(sum(abs(post_ppms))/len(post_ppms),1))
-        
+                pret=str(round(sum(abs(ppm[q]))/len(ppm[q]),1))
+                postt=str(round(sum(abs(post_ppms2))/len(post_ppms2),1))
+    
                 #plotting
                 fig,ax=plt.subplots()
-                plt.scatter(y,pre_ppms,c=[(0.5, 0, 0, 0.3)])
-                plt.scatter(y,post_ppms,c=[(0, 0.5, 0, 0.3)])
+                plt.scatter(y[q],ppm[q],c=[(0.5, 0, 0, 0.3)])
+                plt.scatter(y[q],post_ppms2,c=[(0, 0.5, 0, 0.3)])
                 plt.legend(["pre calibration","post calibration"])
                 plt.xlabel("m/z")
                 plt.ylabel("ppm mass error")
                 plt.title("global_calibration")
                 fig.savefig(fs+"_glob_cal_scat.png",bbox_inches="tight",dpi=300)
-               
+             
                 fig,ax=plt.subplots()
-                y1, _, _ =plt.hist(pre_ppms,color=(0.5, 0, 0, 0.3))
-                y2, _, _ =plt.hist(post_ppms,color=(0, 0.5, 0, 0.3))
-                plt.vlines(np.mean(pre_ppms),0,np.hstack([y1,y2]).max(),color=(0.5, 0, 0, 1),linestyle='dashed')
-                plt.vlines(np.mean(post_ppms),0,np.hstack([y1,y2]).max(),color=(0, 0.5, 0, 1),linestyle='dashed')
+                y1, _, _ =plt.hist(ppm[q],color=(0.5, 0, 0, 0.3))
+                y2, _, _ =plt.hist(post_ppms2,color=(0, 0.5, 0, 0.3))
+                plt.vlines(np.mean(ppm[q]),0,np.hstack([y1,y2]).max(),color=(0.5, 0, 0, 1),linestyle='dashed')
+                plt.vlines(np.mean(post_ppms2),0,np.hstack([y1,y2]).max(),color=(0, 0.5, 0, 1),linestyle='dashed')
                 plt.xlabel("ppm mass error")
                 plt.ylabel("frequency")
-                plt.legend(["pre: mean "+str(round(np.mean(pre_ppms),1))+ ", abs "+pret,
-                            "post: mean "+str(round(np.mean(post_ppms),1))+ ", abs "+postt],
+                plt.legend(["pre: mean "+str(round(np.mean(ppm),1))+ ", abs "+pret,
+                            "post: mean "+str(round(np.mean(post_ppms2),1))+ ", abs "+postt],
                             loc=[1.01,0])
                 plt.title("global_calibration")
                 fig.savefig(fs+"_glob_cal_hist.png",bbox_inches="tight",dpi=300)
                 
                 
-
+#%%
         except:
             pass
             print("calibration failed!")
-            
+     
         pd.DataFrame([[sf,k0]],columns=["sf","k0"]).to_csv(fs+"calib.csv")
 
         return sf,k0
@@ -350,13 +355,16 @@ def smooth_spectrum(ds):
     sSpectrum=pd.Series(Spectrum).rolling(window=c_smoothing_window).mean().fillna(0) 
 
     return sSpectrum,c_smoothing_window
+
+
+
 #%%
 
 #this function returns a smoothed spectrum, and picks singular peaks for calibration and resolution fitting
 def pick_peaks(ds,
                
                rel_height=0.8,
-               height_filter=0.1,
+               height_filter=0.3,
                
                extend_window=extend_window,
                cwt_w=cwt_w,
@@ -366,19 +374,21 @@ def pick_peaks(ds,
     
     # ""+1
     #%% test
-    
-    
     # rel_height=0.5
     # height_filter=0.1
     
     # extend_window=0
     # cwt_w=10
-    # plot_selected=True
-    # plot_non_selected=True
+    # plot_selected=True #False #True
+    # plot_non_selected=False #True
+
+    # rel_height=0.8
+    # height_filter=0.3
+
 
     sSpectrum,c_smoothing_window=smooth_spectrum(ds)
 
-    
+    #subtract baseline
     
     p,pi=find_peaks(sSpectrum,prominence=prominence,distance=distance)
     pro,lb,rb=pi["prominences"],pi["left_bases"],pi["right_bases"]
@@ -436,10 +446,14 @@ def pick_peaks(ds,
                             plt.plot(c.index,c.values)
                             plt.vlines([lw,rw],0,y.max(),color="grey")
                             plt.scatter(p[ix],y[my],color="red")
+                            plt.scatter(c.index[cwp],c.values[cwp],color="orange") #plot cwt peaks
+                            plt.legend(["counts","borders","peak","cwt peaks"])
                             plt.xlim(lw-200,rw+200)
                             plt.title("not selected" + str(ix))
-                                        
+                            
+                            
                         bad.append([p[ix],lw,rw])
+                       
                         continue
 
         if plot_selected:
@@ -531,12 +545,7 @@ scans=math.ceil(I.Nscan)
 k0,sf=I.k0,I.sf
 mode_sign={"positive":"+","negative":"-"}.get((I.polarity).lower())
 calibrants=np.sort(np.array([pySPM.utils.get_mass(i) for i in Calibrants if i.endswith(mode_sign)])) #shortended calibrants list
-
-# meta_S=I.root.goto('Meta/Video Snapshot').dict_list()
-# x_um,y_um=meta_S["fieldofview_x"]["float"]*10**6,meta_S["fieldofview_y"]["float"]*10**6 #in micrometers
-
 x_um,y_um=I.size["real"]["x"]*1e6,I.size["real"]["y"]*1e6
-
 sputtertime=I.get_value("Measurement.SputterTime")["float"] #not sure if correct
 
 
@@ -547,13 +556,15 @@ sputtertime=I.get_value("Measurement.SputterTime")["float"] #not sure if correct
 #add optional calibrant txtfile?
 #ROI plot: check if rotation is correct
 
-#%%
+sSpectrum,ps,pns=pick_peaks(ds)  
+
+
 
 ###### Global calibration ######
 
 sSpectrum,ps,pns=pick_peaks(ds)                                                                    #this only picks "single peaks"
 centroids=np.array([centroid(sSpectrum[i[1]:i[2]].index,sSpectrum[i[1]:i[2]].values) for i in ps]) #calculate peak centroids
-sf,k0,=CalibrateGlobal(centroids,calibrants,sf,k0,ppm_cal=500)                                     #calibrate
+sf,k0,=CalibrateGlobal(centroids,calibrants,sf,k0,ppm_cal=2000)                                     #calibrate
 
 ######  Get mass resolution ###### 
 
@@ -695,7 +706,7 @@ else:
         fig.update_layout(scene = dict(xaxis=dict(title=dict(text='y [micrometer]')),
                                        yaxis=dict(title=dict(text='x [micrometer]')),
                                        zaxis=dict(title=dict(text='Sputter time [s]')),),
-                                       width=700,margin=dict(r=20, b=10, l=10, t=10))
+                                       margin=dict(r=20, b=10, l=10, t=10))
         
         camera = dict(
             up=dict(x=0, y=0, z=1),
@@ -739,7 +750,7 @@ else:
             fig.update_layout(scene = dict(xaxis=dict(title=dict(text='y [micrometer]'),  range=[0,x_um]),
                                            yaxis=dict(title=dict(text='x [micrometer]'),  range=[0,y_um]),
                                            zaxis=dict(title=dict(text='Sputter time [s]'),range=[sputtertime,0]),),
-                                           width=700,margin=dict(r=20, b=10, l=10, t=10))
+                                           margin=dict(r=20, b=10, l=10, t=10))
             
             ax_style = dict(showbackground =True,
                         backgroundcolor="white",
@@ -752,7 +763,9 @@ else:
                               scene=dict(xaxis=ax_style, 
                                          yaxis=ax_style, 
                                          zaxis=ax_style,
-                                         camera_eye=dict(x=1.85, y=1.85, z=1)))
+                                         camera_eye=dict(x=1.85, y=1.85, z=1),
+                                         aspectmode='cube',
+                                         ))
     
             camera = dict(
                 up=dict(x=0, y=0, z=1),
@@ -767,8 +780,8 @@ else:
             fig.show()
             fig.write_html(fs+"_ROI_3D_segment"+str(roi)+".html") #save 3d ROI plot
 
-        
 
+        
    #%%
 ###### Depth profile ######
 
@@ -782,7 +795,9 @@ if ROI_clusters:
 else: ds["ROI"]=0
 cd=ds.groupby(["peak_bin","scan","ROI"]).size().to_frame("count").reset_index()
 
-for roi in range(ROI_clusters+1): #Depth profile per ROI
+
+ss=[]
+for roi in range(ROI_clusters): #Depth profile per ROI
     
     rcd=cd[cd["ROI"]==roi]
     
@@ -804,6 +819,58 @@ for roi in range(ROI_clusters+1): #Depth profile per ROI
     if ROI_clusters>1: rcd.to_csv(fs+"_ROI"+str(roi)+"_depth_profile.tsv",sep="\t")  #save depth profile
     else:              rcd.to_csv(fs+"_depth_profile.tsv",sep="\t")  #save depth profile
     
+    ss.append(rcd.groupby("peak_bin")["count"].sum())
+
+##### Depth profile Biplot ######
+
+#https://stackoverflow.com/questions/39216897/plot-pca-loadings-and-loading-in-biplot-in-sklearn-like-rs-autoplot
+#https://statomics.github.io/HDDA/svd.html#7_SVD_and_Multi-Dimensional_Scaling_(MDS)   
+#https://scentellegher.github.io/machine-learning/2020/01/27/pca-loadings-sklearn.html
+
+
+ss=pd.concat(ss,axis=1).sort_index()
+ss.columns=[np.arange(ROI_clusters)]
+ss.index=np.round(ss.index,2)
+
+#principle component analysis
+ss=(ss-ss.min())/(ss.max()-ss.min()) #minmax scaling
+pca = PCA(n_components=2).fit(ss.T)
+X_reduced = pca.transform(ss.T)
+scores = X_reduced[:, :2]
+loadings=pca.components_.T
+pvars = pca.explained_variance_ratio_[:2] * 100
+
+# proportions of variance explained by axes
+k=10
+arrows = loadings * np.abs(scores).max(axis=0)
+st = (loadings ** 2).sum(axis=1).argsort()
+tops=st[-k:]
+arrows = loadings[tops]
+
+plt.figure(figsize=(5, 5))
+fig,ax=plt.subplots()
+for rx,i in enumerate(scores):
+    c=tuple([int(i)/255 for i in px.colors.qualitative.Safe[roi_reorder[rx]][4:-1].split(", ")])
+    plt.scatter(i[0],i[1],c=c,label=rx)
+ax.legend(loc=[1.05,0.02])
+plt.title("ROI biplot")
+
+# axis labels
+for i, axis in enumerate('xy'):
+    getattr(plt, f'{axis}ticks')([])
+    getattr(plt, f'{axis}label')(f'PC{i + 1} ({pvars[i]:.2f}%)')
+
+width = -0.001 * np.min([np.subtract(*plt.xlim()), np.subtract(*plt.ylim())])
+
+# features as arrows
+for a, arrow in enumerate(arrows):
+    plt.arrow(0, 0, *arrow, color='k', alpha=0.5, width=width, ec='none',
+              length_includes_head=True)
+
+ta.allocate_text(fig,ax,arrows[:,0],arrows[:,1],ss.index[tops])
+
+plt.savefig(fs+"depth_profile_biplot.png",dpi=300,bbox_inches="tight")
+
 
 ###### Dimension reduction ######
 
@@ -1069,6 +1136,8 @@ for MVA_dimension in MVA_dimensions:
                         fig.show()
                         fig.write_html(fs+"_"+MVA_method+"_3D_comp"+str(i)+"loading.html") #save summed intensity 
                 
+                
+    
                 
             
        
