@@ -41,7 +41,6 @@ import plotly.io as pio
 pio.renderers.default='browser'
 
 
-
 # %% change directory to script directory (should work on windows and mac)
 from inspect import getsourcefile
 basedir = str(Path(os.path.abspath(getsourcefile(lambda: 0))).parents[0])
@@ -53,6 +52,8 @@ print(os.getcwd())
 
 #Filepaths
 itmfile=""
+
+
 grd_exe="C:/Program Files (x86)/ION-TOF/SurfaceLab 6/bin/ITRawExport.exe" #path to Grd executable 
 Output_folder=str(Path(basedir,Path(itmfile).stem))
 
@@ -974,7 +975,14 @@ for MVA_dimension in MVA_dimensions:
             
         
                 ldf=pd.DataFrame(np.hstack([sxys,loadings.T]),columns=gcols+np.arange(n_components).tolist())
-                mdf=pd.DataFrame(np.hstack([c2m(ut*MVA_bin_tof,sf,k0).reshape(-1,1),MVA]),columns=["mass"]+np.arange(n_components).tolist())
+                                
+                if data_reduction=="binning": #group by peak
+                    mdf=pd.DataFrame(np.hstack([c2m(ut*MVA_bin_tof,sf,k0).reshape(-1,1),MVA]),columns=["mass"]+np.arange(n_components).tolist())
+                    mdf["peak_mass"]=c2m(p[pmat[m2c(mdf.mass,sf,k0)],0],sf,k0)
+                    mdf=mdf.groupby("peak_mass",sort=False)[np.arange(n_components).tolist()].sum()
+                else:
+                    mdf=pd.DataFrame(np.hstack([c2m(ut,sf,k0).reshape(-1,1),MVA]),columns=["peak_mass"]+np.arange(n_components).tolist())
+                   
                 
                 if ROI_clusters>1: #save with ROI
                     ldf.to_csv(fs+"_ROI"+str(roi)+"_"+str(MVA_dimension)+"D_"+MVA_method+"_loadings.csv")
@@ -1143,7 +1151,4 @@ for MVA_dimension in MVA_dimensions:
                 
                 
     
-                
-            
-       
-   
+
