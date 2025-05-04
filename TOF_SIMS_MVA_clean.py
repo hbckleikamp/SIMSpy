@@ -51,10 +51,7 @@ print(os.getcwd())
 #%% Parameters
 
 #Filepaths
-itmfile="E:/Data/TOF_SIMS/Eric/TOF18_002 (1)/TOF18_002/antwerp-3 (TOF18_002 - 3)@C3 spot1 profile imaging-(+).itm" #good file!
-#itmfile="E:/Data/TOF_SIMS/Eric/TOF18_002 (1)/TOF18_002/I180126e_C3sp4_pos2.itm" #good file!
-# itmfile="E:/Data/TOF_SIMS/Eric/TOF18_002 (1)/TOF18_002/I180126d_C3sp4_pos1.itm"
-itmfile="D:/orbi_processing/OrbiVsTOF/TOF/N_cableBacteria for XPS.itm" #comparison with Orbi
+itmfile="" 
 
 grd_exe="C:/Program Files (x86)/ION-TOF/SurfaceLab 6/bin/ITRawExport.exe" #path to Grd executable 
 Output_folder=str(Path(basedir,Path(itmfile).stem))
