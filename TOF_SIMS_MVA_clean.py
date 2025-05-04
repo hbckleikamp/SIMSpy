@@ -51,8 +51,10 @@ print(os.getcwd())
 #%% Parameters
 
 #Filepaths
-itmfile=""
-
+itmfile="E:/Data/TOF_SIMS/Eric/TOF18_002 (1)/TOF18_002/antwerp-3 (TOF18_002 - 3)@C3 spot1 profile imaging-(+).itm" #good file!
+#itmfile="E:/Data/TOF_SIMS/Eric/TOF18_002 (1)/TOF18_002/I180126e_C3sp4_pos2.itm" #good file!
+# itmfile="E:/Data/TOF_SIMS/Eric/TOF18_002 (1)/TOF18_002/I180126d_C3sp4_pos1.itm"
+itmfile="D:/orbi_processing/OrbiVsTOF/TOF/N_cableBacteria for XPS.itm" #comparison with Orbi
 
 grd_exe="C:/Program Files (x86)/ION-TOF/SurfaceLab 6/bin/ITRawExport.exe" #path to Grd executable 
 Output_folder=str(Path(basedir,Path(itmfile).stem))
@@ -273,15 +275,17 @@ def CalibrateGlobal(channels,calibrants,sf,k0,
                     ppm_cal=2000,
                     min_mass=10,
                     plot=True):
+
    
         try: 
+            #%%
             # #test
             # sf,k0=I.sf,I.k0
             # channels=centroids
             # ppm_cal=2000
             # min_mass=10
             # plot=True
-#%%
+
 
             #get calibrants
             fcalibrants=calibrants[calibrants>min_mass]
@@ -296,12 +300,21 @@ def CalibrateGlobal(channels,calibrants,sf,k0,
             qcal=fcalibrants[q[:,1]]
             ppm=(qmp-qcal)/qcal*1e6
             
-            
             #1st calibration    
             x,y=channels[q1[q[:,0]]],qcal
+            
+            #filter ppm outliers
+            pm=ppm-np.median(ppm)
+            q25,q75=np.percentile(pm,25),np.percentile(pm,75) 
+            q2=(pm<q75+1.5*(q75-q25)) & (pm>q75-1.5*(q75-q25))
+            
+            x,y=x[q2],y[q2]
+            
+
+      
             [sf,k0], _ = curve_fit(c2m,x,y,p0=[sf,k0])
             post_ppms=(c2m(x,sf,k0)-y)/y*1e6
-            
+           
             #filter calibrants
             pm=post_ppms-np.median(post_ppms)
             q1,q3=np.percentile(pm,25),np.percentile(pm,75) 
@@ -313,12 +326,12 @@ def CalibrateGlobal(channels,calibrants,sf,k0,
             
             if plot:
                 
-                pret=str(round(sum(abs(ppm[q]))/len(ppm[q]),1))
+                pret=str(round(sum(abs(ppm[q2][q]))/len(ppm[q2][q]),1))
                 postt=str(round(sum(abs(post_ppms2))/len(post_ppms2),1))
     
                 #plotting
                 fig,ax=plt.subplots()
-                plt.scatter(y[q],ppm[q],c=[(0.5, 0, 0, 0.3)])
+                plt.scatter(y[q],ppm[q2][q],c=[(0.5, 0, 0, 0.3)])
                 plt.scatter(y[q],post_ppms2,c=[(0, 0.5, 0, 0.3)])
                 plt.legend(["pre calibration","post calibration"])
                 plt.xlabel("m/z")
@@ -327,9 +340,9 @@ def CalibrateGlobal(channels,calibrants,sf,k0,
                 fig.savefig(fs+"_glob_cal_scat.png",bbox_inches="tight",dpi=300)
              
                 fig,ax=plt.subplots()
-                y1, _, _ =plt.hist(ppm[q],color=(0.5, 0, 0, 0.3))
+                y1, _, _ =plt.hist(ppm[q2][q],color=(0.5, 0, 0, 0.3))
                 y2, _, _ =plt.hist(post_ppms2,color=(0, 0.5, 0, 0.3))
-                plt.vlines(np.mean(ppm[q]),0,np.hstack([y1,y2]).max(),color=(0.5, 0, 0, 1),linestyle='dashed')
+                plt.vlines(np.mean(ppm[q2][q]),0,np.hstack([y1,y2]).max(),color=(0.5, 0, 0, 1),linestyle='dashed')
                 plt.vlines(np.mean(post_ppms2),0,np.hstack([y1,y2]).max(),color=(0, 0.5, 0, 1),linestyle='dashed')
                 plt.xlabel("ppm mass error")
                 plt.ylabel("frequency")
@@ -571,6 +584,8 @@ sSpectrum,ps,pns=pick_peaks(ds)
 sSpectrum,ps,pns=pick_peaks(ds)                                                                    #this only picks "single peaks"
 centroids=np.array([centroid(sSpectrum[i[1]:i[2]].index,sSpectrum[i[1]:i[2]].values) for i in ps]) #calculate peak centroids
 sf,k0,=CalibrateGlobal(centroids,calibrants,sf,k0,ppm_cal=2000)                                     #calibrate
+
+np.save(fs+"_summed_spectrum",sSpectrum) #save summed spectrum
 
 ######  Get mass resolution ###### 
 
