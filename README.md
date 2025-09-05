@@ -113,9 +113,9 @@ For 1D, MVA can be applied to the depth profiles of each ROI.
 |data_reduction| "binning" | "binning" or "peak_picking" |
 |MVA_bin_pixels,MVA_bin_scans,MVA_bin_tof| 2,2, 5| additional binning for MVA |
 |MVA_components| 3 | Number of regions |     
-|MVA_methods| ["NMF","PCA"]                    | 2D or 3D |
-|MVA_dimensions|"Standard" |  Options: False, "Poisson", "MinMax", "Standard", "Robust", "Jaccard"|
-
+|MVA_methods| ["NMF","PCA"]                    | NMF or PCA |
+|MVA_dimensions|[1,2,3]|  1,2 or 3 dimensions |
+|MVA_scaling|"Standard" |  Options: False, "Poisson", "MinMax", "Standard", "Robust", "Jaccard"|
 
 
 ## 2. Molecular formula prediction
@@ -176,44 +176,73 @@ This is expressed with the dppm value (delta ppm).
 
 ## 3. Targeted analysis
 
-While SIMSpy_MVA is suitable for untargted analysis, SIMSpy_Targeted can handle experiments that want to analyze the distribution of a set of known fragments.
+While SIMSpy_MVA is suitable for untargeted analysis, SIMSpy_Targeted can handle experiments that want to analyze the distribution of a set of known fragments.
+Similar to SIMSpy_MVA, the pipeline first performs a set of operations, such as Truncating, Calibration, Mass resolution detection and Peak deconvolution, which use the same syntax.
+### Inputs
 
+As inputs  a list of .itm files is used. The script will automatically look for the corresponding .grd files.
+If they are not present, it will try to export them using the path to the grd_exe.
+|Parameter           | Default values     |       Description|
+|-----------------|:-----------:|---------------|
+|itmfiles|  | list of files or folder with .itm files|     
+|grd_exe | ITRawExport.exe                  |full path to executable |
+|Target | Targets.csv |list of known fragments |
 
-Truncate
-Calibration
-Mass resolution detection
+### Extract targets
+The first unique part is the extraction of target fragments, which are supplied as a list.
+The abundance of the fragments can be plotted individually in 1,2 or 3 dimensions, or as a set within a group.
+While group labels can be supplied in the input, they can also be discovered automatically
 
-Extract targets
-Sum by groups
-Detect groups
-Expand groups
+|Parameter           | Default values     |       Description|
+|-----------------|:-----------:|---------------|
+|ppm| 100 | maximum mass error for detecting known fragments|     
+|Target_bin_pixels,Target_bin_scans| 2,2                |merging of neighboring pixels or scans|
+|Target_dimension| 2 |which dimension to plot [1,2, or 3] |
+|Sum_by_Groups | True | instead of plotting each fragment individually, sum them by their group label |
 
-Pairwise difference
-Correlation
+### Group detection
+While groups can be supplied manually, fragments can also be grouped on their abundance across datapoints.
+To do this, first a PCA is performed in 2 dimensions (x,y) followed by hierachrical clustering of the PCA components based on cosine distance.
+After extracting PCA, additional untargeted analysis can be included by adding unidentified peaks to the clustering step.
 
-Building a database
-Molecular formula prediction
-Isotope filtering
-Calibration
+|Parameter           | Default values     |       Description|
+|-----------------|:-----------:|---------------|
+|Determine_groups| True | overwrite added group labels with PCA and clustering |     
+|Scaling| Standard  | Options: False, "Poisson", "MinMax", "Standard", "Robust", "Jaccard"||
+|n_components| 2 |number of PCA components|
+|cluster_distance| 0.6 | value between 0-1 or "auto"|
+|Expand_groups| 0 |number unidentified peaks to include in clustering|
 
+### Pairwise comparison
+After different groups have been detected, the difference in counts between each group can be calculated.
+
+|Parameter           | Default values     |       Description|
+|-----------------|:-----------:|---------------|
+|pairwise_diffs| True | compute distance between groups |     
+|maximize_difference| True  | scale groups to maximize small differences |
+|correlate| True | calculate cosine similarity between groups|
 
 ## Example use 
-Molecular formula prediction from command line:
+Each pipeline can be executed within an IDE, or from the command line, below are examples on CLI usage.
+
+SIMSpy_MVA for ROI detection (4) regions in 3D
 ``` 
-python "cart2form.py" -input_file "test_mass_CASMI2022.txt" -composition_file "H[200]C[75]N[50]O[50]P[10]S[10]_b100000max1000rdbe-5_80_7gr_comp.npy"
+python "SIMSpy_MVA.py" -itmfiles "test.itm" -ROI_clusters 4 -ROI_dimensions 3 
 ```
-Alternatively cart2form.py can be imported.
+SIMSpy_MFP for molecular formula prediction with a custom database
 ``` 
-import cart2form
-cart2form.predict_formula(input_file=124.56 ,   #float mass or iterable (array/list/DataFrame)
-                          composition_file="H[200]C[75]N[50]O[50]P[10]S[10]_b100000max1000rdbe-5_80_7gr_comp.npy")
+python "SIMSpy_MFP.py" -input_files "test.itm" -MFP_db "my_db.comp" -ppm 100 -top_candidates 20
+```
+SIMSpy_Targeted for plotting groups of known fragments in 3D
+``` 
+python "SIMSpy_Targeted.py" -itmfiles "test.itm"  -Target "my_fragments.csv" -Target_dimension 3
 ```
 
 
 #### Licensing
 
 The pipeline is licensed with standard MIT-license. <br>
-If you would like to use this pipeline in your research, please cite the following papers: 
+If you would like to use this pipeline in your research, please cite the following papers: (future placeholder)
 
 #### Contact:
 -Hugo Kleikamp (Developer): hugo.kleikamp@uantwerpen.be<br> 
@@ -222,6 +251,6 @@ If you would like to use this pipeline in your research, please cite the followi
 
 #### Related repositories:
 https://github.com/scholi/pySPM<br>
-https://github.com/hbckleikamp/CartMFP
+https://github.com/hbckleikamp/CartMFP<br>
 https://github.com/hbckleikamp/HorIson
 
