@@ -1,34 +1,96 @@
 # SIMSpy
 
 SIMSpy is a collection of python routines that enable untargeted multivariate analysis of TOF-SIMS data, molecular formula prediction, and targeted analysis of fragments.
-it relies on the module pySPM (https://github.com/scholi/pySPM) to extract metadata from IONTOF *.itm* and *.ita* files.
-The current version works with *.grd* raw data files, which need to be exported with the Surfacelab tool ITRawExport.
+it relies on the module pySPM (https://github.com/scholi/pySPM) to extract metadata from IONTOF `.itm` and `.ita` files.
+The current version works with `.grd` raw data files, which need to be exported with the Surfacelab tool ITRawExport.
 Future versions will aim to incorporate also .imzML inputs and custom tabular inputs.
 
 #### SIMSpy function overview 
 
 SIMSpy has three routines.
-1. Untargeted multivariate analysis *SIMSpy_MVA.py*  <br>
-2. Molecular formula prediction *SIMSpy_MFP.py* <br>
-3. Targeted analsysis *SIMSpy_Targeted.py*  <br>
+1. Untargeted multivariate analysis `SIMSpy_MVA.py`  <br>
+2. Molecular formula prediction `SIMSpy_MFP.py` <br>
+3. Targeted analsysis `SIMSpy_Targeted.py`  <br>
 
 
 ## 1. Untargeted multivariate analysis
 
-Binning
-Peak picking
-Calibration 
-ROI detection
-Depth profile extraction
-Isotope detection
-MVA analsysis
+SIMSpy can reveal hidden patterns in data using statistical analysis. Each step is fully automated, enabling
+ROI detection and untargeted depth profile extraction without manual software use.
+We list the key arguments for each of the main steps:
 
-## 2. Untargeted multivariate analysis
+
+### Binning
+
+Binning reduces the size of a dataset by summing neibouring pixels, scans, or mass bins.
+This also reduces noise. Additionally, files can be truncated before binning, to only contain a certain range of pixels, scans or masses.
+For high spatial resolution fast imaging datasets, larger values for bin_pixels are recommended.
+
+|Parameter           | Default values     |       Description|
+|-----------------|:-----------:|---------------|
+|min_mass, max_mass| 0,1000 | mass range (Da)|       
+|min_x, max_x, min_y, max_y, min_scans, max_scans |0 |  truncate in 3D space|
+|bin_pixels, bin_scans, bin_tof| 2,2,5 | merge neigboring pixels, scans, tof values|
+
+### Peak picking
+Peak picking is used for calibration, depth profile extraction, and for detecting mass resolution and ROIs.
+Peak detection only works when there is sufficient mass resolution.
+Since TOF-SIMS peaks can overlap due to poor mass separation, 
+peaks can be deconvoluted with gaussian mixture modellling.
+
+### Calibration 
+
+First attempts to fit optimum values for sf and k0, which as used to convert tof values to mz.
+Then calibration is optimized using a list of internal calibrants.
+There is a list of substrate specific calibrants, and a list of sample specific calibrants.
+If calibration is unsuccesful, a higher ppm_cal value should be tried.
+Sor gold coated silicon wafers, a Substrate value of Au would be used. ITO substrates, InOSiSn can be used.
+
+|Parameter           | Default values     |       Description|
+|-----------------|:-----------:|---------------|
+|ppm_cal| 100 | Mass error tolerance for detecting internal calibrants|     
+|Calibrants | Calibrants.csv                     |List of typical internal calibrants |
+|Substrate_Calibrants | Substrate_Calibrants.csv  |List of internal calibrants coming from the substrate|
+|Substrate|Au |  List of elements present in substrate (filters substrate internal calibrants to only contain these elements) |
+
+#### Mass resolution detection
+
+Fitting the mass resolution
+filter out too narrow or too wide peaks
+
+#### ROI detection
+
+scaling
+clusters
+dimensions
+
+
+
+#### Depth profile extraction
+
+Smoothing
+Normalize
+
+#### Isotope detection
+
+Isotope range
+Cosine correlation
+
+#### MVA analsysis
+MVA type
+components
+dimensions
+
+
+
+## 2. Molecular formula prediction
 
 Building a database
 Molecular formula prediction
+Isotope filtering
+Calibration
 
-
+## 2. Molecular formula prediction
 
 
 A database is constructed by enumerating all combinations of elements within a certain range.
