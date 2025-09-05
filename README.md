@@ -2,7 +2,7 @@
 
 SIMSpy is a collection of python routines that enable untargeted multivariate analysis of TOF-SIMS data, molecular formula prediction, and targeted analysis of fragments.
 it relies on the module pySPM (github.com/scholi/pySPM) to extract metadata from IONTOF `.itm` and `.ita` files.
-The main input file is .itm but requires a `.grd` raw data file in the same folder, which need to be exported with the Surfacelab tool ITRawExport. 
+The main input file is .itm but requires a `.grd` raw data file in the same folder, which need to be exported with the Surfacelab tool ExportITMtoGRD. 
 Future versions will aim to incorporate also .imzML inputs and custom tabular inputs.
 
 #### SIMSpy function overview 
