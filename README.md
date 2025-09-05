@@ -1,7 +1,7 @@
 # SIMSpy
 
 SIMSpy is a collection of python routines that enable untargeted multivariate analysis of TOF-SIMS data, molecular formula prediction, and targeted analysis of fragments.
-it relies on the module pySPM (https://github.com/scholi/pySPM) to extract metadata from IONTOF `.itm` and `.ita` files.
+it relies on the module pySPM (github.com/scholi/pySPM) to extract metadata from IONTOF `.itm` and `.ita` files.
 The main input file is .itm but requires a `.grd` raw data file in the same folder, which need to be exported with the Surfacelab tool ITRawExport. 
 Future versions will aim to incorporate also .imzML inputs and custom tabular inputs.
 
@@ -112,12 +112,37 @@ For 1D, MVA can be applied to the depth profiles of each ROI.
 
 ## 2. Molecular formula prediction
 
-Building a database
-Molecular formula prediction
-Isotope filtering
-Calibration
+Molecular formula prediction is based on the tool CartMFP (github.com/hbckleikamp/CartMFP), while isotope simlation is done using HorIson (github.com/hbckleikamp/HorIson).
+As inputs for MFP exported depth profiles or MVA loadings from SIMSpy_MVA can be used.
 
-## 3. Molecular formula prediction
+### Building a database
+The database architecture of CartMFP is used, this includes using `space2cart.py` for database construction.
+This constructs a local database with all possible combinations of elements within a certain compositional space.
+See the documentation of CartMFP for a more in depth explanation of the syntax.
+
+### Molecular formula prediction
+Supplying a list of background ions not 
+
+
+### Isotope filtering
+### Calibration
+
+## 3. Targeted analysis
+
+While SIMSpy_MVA is suitable for untargted analysis, SIMSpy_Targeted can handle experiments that want to analyze the distribution of a set of known fragments.
+
+
+Truncate
+Calibration
+Mass resolution detection
+
+Extract targets
+Sum by groups
+Detect groups
+Expand groups
+
+Pairwise difference
+Correlation
 
 Building a database
 Molecular formula prediction
