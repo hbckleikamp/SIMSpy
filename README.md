@@ -19,6 +19,14 @@ SIMSpy can reveal hidden patterns in data using statistical analysis. Each step 
 ROI detection and untargeted depth profile extraction without manual software use.
 We list the key arguments for each of the main steps:
 
+### Inputs
+
+As inputs  a list of .itm files is used. The script will automatically look for the corresponding .grd files.
+If they are not present, it will try to export them using the path to the grd_exe.
+|Parameter           | Default values     |       Description|
+|-----------------|:-----------:|---------------|
+|itmfiles|  | list of files or folder with .itm files|     
+|grd_exe | ITRawExport.exe                  |full path to executable |
 
 ### Binning
 
@@ -115,17 +123,56 @@ For 1D, MVA can be applied to the depth profiles of each ROI.
 Molecular formula prediction is based on the tool CartMFP (github.com/hbckleikamp/CartMFP), while isotope simlation is done using HorIson (github.com/hbckleikamp/HorIson).
 As inputs for MFP exported depth profiles or MVA loadings from SIMSpy_MVA can be used.
 
+### Input
+
+|Parameter           | Default values     |       Description|
+|-----------------|:-----------:|---------------|
+|input_files|  | list of depth profiles or list of masses |
+|MFP_dbf| |  path to database file as constructed by space2cart.py|
+
+
 ### Building a database
 The database architecture of CartMFP is used, this includes using `space2cart.py` for database construction.
 This constructs a local database with all possible combinations of elements within a certain compositional space.
 See the documentation of CartMFP for a more in depth explanation of the syntax.
 
 ### Molecular formula prediction
-Supplying a list of background ions not 
+Molecular formula predition is done using the constructed database. Additionally, a list of background ions can be supplied,
+which are also used as internal calibrants.
+
+|Parameter           | Default values     |       Description|
+|-----------------|:-----------:|---------------|
+|ppm| 500 | max mass error tolerance of predicted formulas |
+|top_candidates| 100|  number of top canidadates in output|
 
 
-### Isotope filtering
-### Calibration
+### Calibration 
+After the first round of molecular formula prediction, formulas that match internal calibrants are used to recalibrate the masses within the dataset.
+A secondary MFP is done after recalibration with a more narrow ppm window (pos_calib_ppm)
+
+|Parameter           | Default values     |       Description|
+|-----------------|:-----------:|---------------|
+|post_calib_ppm| 200 | Mass error tolerance for secondary MFP after recalibration|     
+|Calibrants | Calibrants.csv                     |List of typical internal calibrants |
+|Substrate_Calibrants | Substrate_Calibrants.csv  |List of internal calibrants coming from the substrate|
+|Substrate|Au |  List of elements present in substrate (filters substrate internal calibrants to only contain these elements) |
+
+### Isotope filtering ###
+Isotope filtering provides a way to improve the quality of annotations.
+Since TOF-SIMS lacks the mass resolution to distinguish +H mass from +n, isotope filtering is only useful to highlight missing isotopes.
+For earch predicted molecualr formula isotopes are predicted within a certain range using HorIson.
+Isotope intensity is normalized towards the monoisotopic peak. Isotopes below a certain intensity treshold are removed.
+Remaining expected isotopes are compared to the measured isotopic envelope, using the cosine similarity.
+
+|Parameter           | Default values     |       Description|
+|-----------------|:-----------:|---------------|
+isotope_range| [-2,6] | minimum, maximimum range of simulated isotopes |     
+|min_intensity | 10                    |minimum intensity treshold of simulated isotopes |
+
+### ppm filtering
+As secondary qualtiy metric (next to cosine similarity) the local average ppm error is calculated.
+Correct formula predictions are expected to have similarl ppm mass errors.
+This is expressed with the dppm value (delta ppm).
 
 ## 3. Targeted analysis
 
