@@ -55,7 +55,7 @@ Sor gold coated silicon wafers, a substrate value of Au would be used. ITO subst
 |Substrate_Calibrants | Substrate_Calibrants.csv  |List of internal calibrants coming from the substrate|
 |Substrate|Au |  List of elements present in substrate (filters substrate internal calibrants to only contain these elements) |
 
-#### Mass resolution detection
+### Mass resolution detection
 
 Fitting the mass resolution can be used to predict the FWHM of peaks as a function of mass.
 This can then be used for peak deconvolution. Optionanly too narrow or too wide peaks can be removed.
@@ -64,10 +64,9 @@ This can then be used for peak deconvolution. Optionanly too narrow or too wide 
 |-----------------|:-----------:|---------------|
 |min_width_ratio,max_width_ratio| 0  |remove based on ratio e of measured peak width/ expected peak width|
 
-#### ROI detection
+### ROI detection
 
 Regions of interest (ROI) are detected using Kmeans clustering, in 2D or 3D space to perform image segmentaiton.
-
 
 |Parameter           | Default values     |       Description|
 |-----------------|:-----------:|---------------|
@@ -76,18 +75,24 @@ Regions of interest (ROI) are detected using Kmeans clustering, in 2D or 3D spac
 |ROI_scaling|"Poisson" |  Options: False, "Poisson", "MinMax", "Standard", "Robust", "Jaccard"|
 
 
-#### Depth profile extraction
+### Depth profile extraction
 
-Depth profiles for each individual ROI are exported. 
-
-
-Smoothing
-Normalize
+Depth profiles foreach peak are exported per ROI. They can be smoothed with moving average, or normalized to total.
+|Parameter           | Default values     |       Description|
+|-----------------|:-----------:|---------------|
+|normalize| True | noramalize to total |     
+|smoothing | 3                     | weighted average smoothing window|
 
 #### Isotope detection
+To improve molecular formula predictio, SIMSpy_MVA includes isotope detection.
+For each mass peaks, potential isotope peaks are detected with a certain mass error.
+Candidate isotope peaks are filtered on their cosine similarity.
 
-Isotope range
-Cosine correlation
+|Parameter           | Default values     |       Description|
+|-----------------|:-----------:|---------------|
+|isotope_range| [-4,6] | minimum isotope, maximimum isotope |     
+|min_cosine | 0.9                     | minimum cosine similarity to mono isotope|
+
 
 #### MVA analsysis
 1D MVA can be applied to the depth profiles of each ROI.
