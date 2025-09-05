@@ -30,7 +30,7 @@ For high spatial resolution fast imaging datasets, larger values for bin_pixels 
 |-----------------|:-----------:|---------------|
 |min_mass, max_mass| 0,1000 | mass range (Da)|       
 |min_x, max_x, min_y, max_y, min_scans, max_scans |0 |  truncate in 3D space|
-|bin_pixels, bin_scans, bin_tof| 0,0,0 | merge neigboring pixels, scans, tof values|
+|bin_pixels, bin_scans, bin_tof| 0 | merge neigboring pixels, scans, tof values|
 
 ### Peak picking
 Peak picking is used for calibration, depth profile extraction, and for detecting mass resolution and ROIs.
