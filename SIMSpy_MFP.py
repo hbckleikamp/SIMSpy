@@ -32,11 +32,10 @@ base_vars=list(locals().copy().keys()) #base variables
 
 
 ### Input ###
-input_folders=[]   #required
-MFP_db=""          #required
+input_files=[]   #required
+MFP_db=""        #required
+input_type="ROI" #ROI or MFP
 Output_folder=""
-
-
 
 ### MFP ###
 ppm=500
@@ -116,13 +115,8 @@ if len(load_params):
             locals().update(jdict)
 
 
-if type(input_folders)==str:  input_folders=input_folders.split(",")
-temp=[]
-for f in input_folders:
-    if os.path.isdir(f): [temp.append(i) for i in os.listdir(f) if i.endswith("_peaks.tsv")]
-    else: temp.append(f)
-input_folders=np.hstack(temp)
-         
+if type(input_files)==str:  input_files=input_files.split(",")
+
 
 isotope_range=np.arange(isotope_range[0],isotope_range[1]+1)
 
@@ -251,6 +245,7 @@ def find_background(Calibrants,masses):
         
 
 
+
 #parse calibrants
 if type(Substrate_Calibrants)==str:
     if os.path.exists(Substrate_Calibrants): Substrate_Calibrants=pd.read_csv(Substrate_Calibrants).values.flatten().tolist()
@@ -289,43 +284,72 @@ def MFP(masses,ppm):
     return mfp
 
     
-emass = 0.000548579909  # electron mass
+
+#%% 
+
+
+
+filenames=[]
+dfs=[]
+
+for ifile in input_files:
+    
+    if input_type=="ROI": 
+        df=pd.read_csv(ifile,sep="\t")
+        dfs.append(df)
+        filenames.append(ifile)
+        
+        
+    if input_type=="MVA": 
+        
+        df=pd.read_csv(ifile)
+        for i in df.columns[1:].tolist():
+            x=df[["peak_mass",i]]
+            x.columns=["mass","Apex"]
+            dfs.append(x)
+            filenames.append(ifile.replace("components.csv","component_"+str(i)+".csv"))
+
+
+    
+
+    
+    
+    
+    
+    
+#%%
+
+
 
 #%% make masses unique
-for ifile in input_folders:
-    
-    fs=Path(ifile).stem
-    
-        
-    if write_params: 
-        with open(fs+".MFP_params", 'w') as f:
-            json.dump(params, f)
-    
-    if os.path.exists(Output_folder): fss=str(Path(Output_folder,fs))
-    else:                             fss=str(Path(Path(ifile).parents[0],fs))                          
-    lrecalibrate=recalibrate #reset in each loop
+for file_ix,ifile in enumerate(filenames):
     
 
+
+    fs=Path(ifile).stem
+    if os.path.exists(Output_folder): fss=str(Path(Output_folder,fs))
+    else:                             fss=str(Path(Path(ifile).parents[0],fs))                          
+    
+    lrecalibrate=recalibrate #reset in each loop
 
     #read isotopic information
     if   "(-)" in ifile:  mode,mode_sign,adducts="neg","-",["-H+",'+-'] #test ['+-']
     elif "(+)" in ifile:  mode,mode_sign,adducts="pos","+",["+H+",'--']  #test ['--']
-    
 
-    #monoisotopic masses
-    df=pd.read_csv(ifile,sep="\t")
+    
+    df=dfs[file_ix]
     if "index" not in df.columns: df["index"]=np.arange(len(df))
-
-    
     df=df.set_index("index")
     if not "isotope" in df.columns: df["isotope"]=0
     monos=df[df["isotope"]==0]
-
+    
     #Non 7gr annotation
     mfp=MFP(monos.mass,ppm=ppm)
     if not len(mfp):
         print("no formulas found")
         continue
+
+    
 
     #make unique formulas
     mfp=mfp.sort_values(by=["index","formula+adduct","appm"])
@@ -393,11 +417,13 @@ for ifile in input_folders:
     #%% Isotope prediction
    
     
+
     imass=HorIson.multi_conv(mfp[elements],isotope_range=isotope_range)
     imass["abundance"]/=imass.loc[imass.isotope==0,"abundance"].loc[imass.index] #normalize to mono
     imass["abundance"]*=mfp["Mono_intensity"].loc[imass.index]                   #correct with mono mfp
-
     imass=imass[imass["abundance"]>=min_intensity]
+
+
     dm,im=df.mass.values,imass.mass.values
     
     #correct with charge
@@ -406,14 +432,13 @@ for ifile in input_folders:
     
     #correct with ppm
     im*=(1-mfp.loc[imass.index,"ppm"].values/1e6)
-    
     tree = KDTree(im.reshape(1,-1).T, leaf_size=200) 
-    t=tree.query_radius(dm.reshape(1,-1).T,r=dm*ppm/1e6)
+    t=tree.query_radius(dm.reshape(1,-1).T,r=dm*post_calib_ppm/1e6)
     u=[np.vstack([np.repeat(ix,len(i)),i]).T for ix,i in enumerate(t) if len(i)]
     idf=pd.DataFrame(np.vstack(u),columns=["dx","ix"])
     
-    idf["dix"]=df.iloc[idf.dx].index.values
-    idf["iix"]=imass.iloc[idf.ix].index.values
+    idf["dix"]=df.iloc[idf.dx].index.values    #index of measured row
+    idf["iix"]=imass.iloc[idf.ix].index.values #index of simulated row
     idf[["diso","dint","mm"]]=df.iloc[idf.dx][["isotope","Apex","mass"]].values
     idf[["siso","sint","mi"]]=imass.iloc[idf.ix][["isotope","abundance","mass"]].values
     
@@ -422,17 +447,18 @@ for ifile in input_folders:
     idf["appm"]=idf["ppm"].abs()
     
     idf=idf.sort_values(by=["iix","siso","appm"]).groupby(["ix","siso"],sort=False).nth(0)
-
     idf["cint"]=np.clip(idf["dint"],0,idf["sint"])
     idf["eu"]=abs(idf["cint"]-idf["sint"])
+    
     seu=idf.groupby(["iix"])[["cint","eu"]].sum()
     seu["neu"]=1-seu["eu"]/seu["cint"]
     mfp["euclidian_sim"]=seu["neu"]     
    
         
     #add isotopes
-    pvs=idf.pivot(columns="siso",index="iix",values="sint")
-    pvi=idf.pivot(columns="siso",index="iix",values="dint")
+    sidf=idf.groupby(["iix","siso"])[["sint","dint"]].sum().reset_index() #sum or pick lowest ppm?
+    pvs=sidf.pivot(columns="siso",index="iix",values="sint")
+    pvi=sidf.pivot(columns="siso",index="iix",values="dint")
     pcols=["m_"+str(i) for i in pvi.columns]
     scols=["s_"+str(i) for i in pvs.columns]
     mfp[pcols]=pvi     
@@ -440,7 +466,7 @@ for ifile in input_folders:
     
 
 
-    #%% filter on ppm
+    ## filter on ppm
     fmfp=mfp.sort_values(by=["original_index","appm"]).groupby("original_index",sort=False).nth(0)
     
     
@@ -449,20 +475,15 @@ for ifile in input_folders:
     
     p1=np.convolve(y, np.ones(10), 'valid') / 10 #rolling mean
     try: #weighted lowess
-
         l=loess.loess(x1, y, weights=np.log2(w),span=0.75)
         l.fit()
         p1 = l.predict(x1).values
     except: #normal lowess
-
         lm = lowess.Lowess()
         lm.fit(x1,y, frac=.75, num_fits=100) #lowess fit introduces randomness each time
         p1=lm.predict(x1)
     
 
-    
-        
-    
     x1=x1[:len(p1)]
     y=y[:len(p1)]
     
@@ -472,9 +493,6 @@ for ifile in input_folders:
     plt.title(fs)
 
     fig.savefig(fs+"_post_mfp_calibration.png",bbox_inches="tight",dpi=300)
-
-    
-
     mfp["dppm"]=abs(mfp["ppm"]-np.interp(mfp["input_mass"],x1,p1))
     mfp.to_csv(fss+"_best_mfp.tsv",sep="\t")
     
@@ -482,12 +500,6 @@ for ifile in input_folders:
     
     idf["dppm"]=abs(idf["ppm"]-np.interp(idf["mm"],x1,p1))
     idf["formula"]=mfp["formula+adduct"].loc[idf.iix].values
-    
     q=idf["siso"]!=0
     idf.loc[q,"formula"]+="^"+idf.loc[q,"siso"].astype(float).astype(int).astype(str)
     idf.to_csv(fss+"_peak_mfp.tsv",sep="\t")
-
-
-    #%% To Do:
-        #Add maximum coverage problem (pulp)
-   
