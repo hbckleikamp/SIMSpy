@@ -17,17 +17,19 @@ import json
 
 import math
 import numpy as np
+from numpy.linalg import norm
 import pandas as pd
 
 
 
 from skmisc import loess #specific module for weighted Loess
 
-from scipy.optimize import curve_fit
+from scipy.optimize import curve_fit, nnls
 from scipy.signal import find_peaks,find_peaks_cwt, savgol_filter
-from scipy.sparse import csr_matrix 
+from scipy.sparse import csr_matrix, coo_matrix
+from scipy.ndimage import gaussian_filter
 
-from sklearn.preprocessing import robust_scale, StandardScaler,MaxAbsScaler
+from sklearn.preprocessing import robust_scale, maxabs_scale, StandardScaler #,MaxAbsScaler
 from sklearn.decomposition import PCA,TruncatedSVD,NMF
 from sklearn.cluster import KMeans
 from sklearn.metrics import r2_score
@@ -54,64 +56,73 @@ base_vars=list(locals().copy().keys()) #base variables
 #%% Parameters
 
 #Filepaths
-
-itmfiles=[]
-
+itmfiles=""
 grd_exe="C:/Program Files (x86)/ION-TOF/SurfaceLab 6/bin/ITRawExport.exe" #path to Grd executable 
 Output_folder=""
 write_params=True
-params=""
+load_params=""
 
 #initial dimension redution
-max_mass=1000        #truncate mass
-max_scans=False      #truncate scans
-min_width_ratio=0.1  #remove based on ratio to expected peakwidth
-max_width_ratio=5    #remove based on ratio to expected peakwidth
-
+max_mass=1000            #truncate mass
+min_scans,max_scans=0,0 #truncate scans 
+min_x,max_x=0,0
+min_y,max_y=0,0
+min_width_ratio,max_width_ratio=0,0       #remove based on ratio to expected peakwidth
+bin_pixels=0
+bin_scans=0 
+bin_tof=0
+Remove_bin_edges=True   #when corners do not satifsy complete bins, trim them
 
 #peak picking
 prominence=10
 distance=20       #minimum distance between peaks
 extend_window=20  #extend around peak bases
 cwt_w=10          #wavelet transform window
-
+Peak_deconvolution=True
 
 #Calibration
-
-ppm_cal=200          #maximum deviation for finding internal calibrants
-Substrate=""         #list of elements that are present on substrate
+ppm_cal=100         #maximum deviation for finding internal calibrants
+Substrate="Au"         #list of elements that are present on substrate
 Substrate_Calibrants=str(Path(basedir,"Substrate_Calibrants.csv"))  #list of ions coming from substrate
 Calibrants=str(Path(basedir,"Calibrants.csv"))                      #list of typical background ions
 
 
 #ROI
 ROI_peaks=1000
-ROI_clusters=4
-ROI_dimensions=3
-ROI_bin_pixels=3                
-ROI_bin_scans=5
-ROI_scaling="Standard" #Jaccard           # Options: False, "Poisson", "MinMax", "Standard", "Robust", "Jaccard"
+ROI_clusters=0
+ROI_dimensions=3 
+ROI_bin_pixels=2                #integer or fraction 
+ROI_bin_scans=2 
+ROI_scaling="Poisson" #Jaccard           # Options: False, "Poisson", "MinMax", "Standard", "Robust", "Jaccard"
 
 #depth profile
-normalize=False
-smoothing=False
+normalize=True
+smoothing=3
+
+#isotope detection
+Detect_isotopes=True
+isotope_range=[-4,6] 
+ippm=100          #ppm tolerance for detecting isotopes
+co_normalize=False #normalize during cosine correlation of depth profiles
+co_smoothing=3     #smooth during cosine correlation of depth profiles
+min_cosine=0.9
 
 #MVA dimension reduction
 data_reduction="binning" #"binning" #or peak_picking
 
 #if binning
 MVA_bin_tof=5           # bins tof (mass)
-MVA_bin_pixels=3       # bins in 2 directions: 2->, 3->9 data reduction
-MVA_bin_scans=5       # bin scans
+MVA_bin_pixels=2 #3       # bins in 2 directions: 2->, 3->9 data reduction
+MVA_bin_scans=2   #5       # bin scans
 min_count=2         # remove bins with les than x counts
 
 #MVA
-MVA_peaks=0             #maxmimum nr of peaks used for MVA
-MVA_dimensions=[1,2,3]  #can be list
+MVA_peaks=0 #10000 #maxmimum nr of peaks used for MVA
+MVA_dimensions=[2] #[1,2,3]  #can be list
 MVA_components=5          # number of components
 MVA_methods=["NMF","PCA"]
-Sparse_first=True       # Sparse first will make matrix sparese before scaling. this can slightly affect scaling such as robust scale, as no centering is done
-MVA_scaling="MinMax"    # Options: False, "Poisson", "MinMax", "Standard", "Robust", "Jaccard"
+MVA_scaling="Standard"    # Options: False, "Poisson", "MinMax", "Standard", "Robust", "Jaccard"
+reconstruct=True          # Convert components back to total intensity (NMF only)
 
 #Top_quantile=0.25 #False      # [0-1, float] only retain mass channels that have top X abundance quantile 
 Remove_zeros=True       #
@@ -140,13 +151,14 @@ if not hasattr(sys,'ps1'): #checks if code is executed from command line
                         help="if no .grd files are present, they will be made with this executable. if not available, request access to IonTOF")
     parser.add_argument("-o", "--Output_folder", required = False, default="", help="Output folder")
     parser.add_argument("--write_params",  required = False, default=True, help="write parameters used to file")
-    parser.add_argument("--params",  required = False, default="", help="use params from a file")
+    parser.add_argument("--load_params",  required = False, default="", help="use params from a file")
     
     #initial dimension redution
     parser.add_argument("--max_mass", required = False, default=1000, help="removes masses above this threshold")
     parser.add_argument("--max_scans", required = False, default=False, help="removes scans above this threshold")
     parser.add_argument("--min_width_ratio", required = False, default=0.1, help="remove masses below the ratio to expected peakwidth")
     parser.add_argument("--max_width_ratio", required = False, default=5, help="remove masses above the ratio to expected peakwidth")
+    parser.add_argument("--Remove_bin_edges", required = False, default=True, help="if bins are not fully filled, ignore bin (this could remove last x/y pixels or last scan)")
     
     #calibration 
     parser.add_argument("--ppm_cal", required = False, default=500, help="maximum ppm devatation for selecting calibrants")
@@ -169,8 +181,17 @@ if not hasattr(sys,'ps1'): #checks if code is executed from command line
     parser.add_argument("--ROI_bin_scans", required = False, default=5, help='if binning: bin frames (scans)')   
 
     #depth profile
+    parser.add_argument("--Peak_deconvolution", required = False, default=True, help=' Split mixed peaks with gaussian deconvolution')
     parser.add_argument("--normalize", required = False, default=False, help=' normalize depth profile to total count')
     parser.add_argument("--smoothing", required = False, default=0, help=' moving average smoothing window')
+
+    #Isotope detection
+    parser.add_argument("--Detect_isotopes", required = False, default=True, help=' Perform isotope detection')
+    parser.add_argument("--isotope_range", required = False, default=[-2,6] , help=' minimum and maximum isotope considered')
+    parser.add_argument("--ippm", required = False, default=True, help=' ppm mass error used for identifying isotopes')
+    parser.add_argument("--min_cosine", required = False, default=0.9, help=' minimum cosine similarity of isotopes compared to monoisotope peak')
+    parser.add_argument("--co_normalize", required = False, default=True, help=' normalize during cosine correlation of depth profiles')
+    parser.add_argument("--co_smoothing", required = False, default=3, help=' smooth during cosine correlation of depth profiles')
 
     #MVA data reduction
     parser.add_argument("--data_reduction", required = False, default="binning", help='MVA data reduction: "binning" or "peak_picking"')    
@@ -201,18 +222,23 @@ if not hasattr(sys,'ps1'): #checks if code is executed from command line
     print("")
     locals().update(params)
 
+#%% update arguments
+
 #update arguments from parameter file
-if len(params): 
-    if os.path.exists(params):
-        with open(params, 'r') as f:
+if len(load_params): 
+    if os.path.exists(load_params):
+        with open(load_params, 'r') as f:
             jdict=json.load(params, f)
             locals().update(jdict)
+
+
+if type(itmfiles)==str: itmfiles=itmfiles.split(",")
 
 if type(MVA_dimensions)==int or type(MVA_dimensions)==float: MVA_dimensions=[int(MVA_dimensions)]
 if type(MVA_methods)==str: MVA_methods=[i.strip() for i in MVA_methods.split(",")]
 MVA_dimensions.sort()
 
-#%%
+isotope_range=np.arange(isotope_range[0],isotope_range[1]+1)
 
 #get element masses
 ifile=str(Path(basedir,"natural_isotope_abundances.tsv"))
@@ -220,6 +246,11 @@ emass=0.000548579909 #mass electron
 elements=pd.read_csv(ifile,sep="\t") #Nist isotopic abundances and monisiotopic masses
 elements=elements[elements["Standard Isotope"]].set_index("symbol")["Relative Atomic Mass"]
 elements=pd.concat([elements,pd.Series([-emass,emass],index=["+","-"])]) #add charges
+
+if type(itmfiles)==str:
+    if os.isdir(itmfiles):
+        itmfiles=[str(Path(itmfiles,i)) for i in os.listdir(itmfiles) if i.endswith(".itm")]        
+    else: itmfiles=itmfiles.split(",")
 
 
 #%% Functions
@@ -229,6 +260,8 @@ def m2cf(m,sf,k0):   return  ( sf*np.sqrt(m) + k0 )   #float version
 def c2m(c,sf,k0):    return ((c - k0) / (sf)) ** 2   
 def residual(p,x,y): return (y-c2m(x,*p))/y
 def centroid(x, y):  return np.sum(x * y) / np.sum(y)
+def Gauss(x, a,mu, sig): return a*(1.0 / (np.sqrt(2.0 * np.pi) * sig) * np.exp(-np.power((x - mu) / sig, 2.0) / 2))
+def gaussian(x, mu, sig): return (1.0 / (np.sqrt(2.0 * np.pi) * sig) * np.exp(-np.power((x - mu) / sig, 2.0) / 2))
 
 #https://stackoverflow.com/questions/47125697/concatenate-range-arrays-given-start-stop-numbers-in-a-vectorized-way-numpy
 def create_ranges(a):
@@ -274,9 +307,23 @@ def getMz(form): #this could be vectorized for speed up in the future
     return (cdf.values*elements.loc[cdf.columns].values).sum() / cdf[["+","-"]].sum(axis=1)
     
 
+#https://stackoverflow.com/questions/51570512/minmax-scale-sparse-matrix-excluding-zero-elements
+def scale_sparse_matrix_rows(s, lowval=0, highval=1):
+    d = s.data
 
+    lens = s.getnnz(axis=1)
+    idx = np.r_[0,lens[:-1].cumsum()]
 
+    maxs = np.maximum.reduceat(d, idx)
+    mins = np.minimum.reduceat(d, idx)
 
+    minsr = np.repeat(mins, lens)
+    maxsr = np.repeat(maxs, lens)
+
+    D = highval - lowval
+    scaled_01_vals = (d - minsr)/(maxsr - minsr)
+    d[:] = scaled_01_vals*D + lowval
+ 
 
 def CalibrateGlobal(channels,calibrants,sf,k0,
                     ppm_cal=ppm_cal,
@@ -289,10 +336,10 @@ def CalibrateGlobal(channels,calibrants,sf,k0,
             
         #%%
    
-        # #test
+        # # #test
         # sf,k0=I.sf,I.k0
         # channels=centroids
-        # ppm_cal=1000
+        # ppm_cal=200
         # min_mass=10
         # plot=True
         # weights=sSpectrum[ps[:,0]].values
@@ -332,6 +379,8 @@ def CalibrateGlobal(channels,calibrants,sf,k0,
             caldf["mass"]=c2m(caldf["channels"],sf,k0)
             caldf["ppm"]=(caldf["mass"]-caldf["c"])/caldf["c"]*1e6
 
+        #""+1 #replace loess function
+        
 
         ### weighed Loess with quantile denoising
         x,y=caldf["mass"],caldf["ppm"]
@@ -350,11 +399,10 @@ def CalibrateGlobal(channels,calibrants,sf,k0,
         else:           l=loess.loess(xq, yq,span=0.9)
         l.fit()
 
-
         if plot:
             
-            pq = l.predict(x).values    
-            post_ppms=y-pq
+            pq = l.predict(xq).values    
+            post_ppms=yq-pq
             
                 
             if len(weights):
@@ -371,8 +419,8 @@ def CalibrateGlobal(channels,calibrants,sf,k0,
             #plotting
             fig,ax=plt.subplots()
             plt.scatter(x,caldf["ppm"],c=[(0.5, 0, 0, 0.3)],label="pre calibration")
-            plt.scatter(x,post_ppms,   c=[(0, 0.5, 0, 0.3)],label="post calibration")
-            plt.plot(x,pq,linestyle="--",color="grey",label="Loess fit")
+            plt.scatter(xq,post_ppms,   c=[(0, 0.5, 0, 0.3)],label="post calibration")
+            plt.plot(xq,pq,linestyle="--",color="grey",label="Loess fit")
             plt.legend()
             plt.xlabel("m/z")
             plt.ylabel("ppm mass error")
@@ -394,7 +442,7 @@ def CalibrateGlobal(channels,calibrants,sf,k0,
             fig.savefig(fs+"_glob_cal_hist.png",bbox_inches="tight",dpi=300)
             plt.close()
             
-
+#%%
     except:
        
         print("calibration failed!, increase calibration ppm?")
@@ -402,7 +450,7 @@ def CalibrateGlobal(channels,calibrants,sf,k0,
         
     pd.DataFrame([[sf,k0]],columns=["sf","k0"]).to_csv(fs+"calib.csv")
 
-    return sf,k0,x,pq
+    return sf,k0,xq,pq
 
 
 def smooth_spectrum(ds):
@@ -440,8 +488,8 @@ def pick_peaks(ds,
     
     # extend_window=0
     # cwt_w=10
-    #plot_selected=True #False #True
-    #plot_non_selected=True #True
+    # plot_selected=True #False #True
+    # plot_non_selected=False #True
 
     # rel_height=0.8
     # height_filter=0.3
@@ -531,6 +579,7 @@ def pick_peaks(ds,
     return sSpectrum,np.array(good)-c_smoothing_window,np.array(bad)-c_smoothing_window
 
 
+
     
     
 def varimax(Phi, gamma = 1, q = 20, tol = 1e-6):
@@ -576,11 +625,8 @@ def bits(x,neg=False):
     if neg: dtypes=[np.int8,np.int16,np.int32,np.int64]
     return dtypes[np.argwhere(bitsize-(np.log2(x)+1)>0).min()]
 
+
 #%%
-
-
-
-
 
 #parse calibrants
 if type(Substrate_Calibrants)==str:
@@ -596,15 +642,28 @@ Substrate_allowed=pd.concat([parse_form(i) for i in Substrate]).columns
 Substrate_f=[i for i in Substrate_Calibrants if parse_form(i).columns.isin(Substrate_allowed).all()]
 Calibrants+=Substrate_f
 
-if type(itmfiles)==str: itmfiles=itmfiles.split(",")
+#%%
+
+t=[]
 
 for itmfile in itmfiles:
     
     I = pySPM.ITM(itmfile)
     
+    ### Get ITM metadata ###
+    xpix,ypix= math.ceil(I.size["pixels"]["x"]), math.ceil(I.size["pixels"]["y"])
+    scans=math.ceil(I.Nscan)
+    old_xpix,old_ypix,old_scans=xpix,ypix,scans #store    
+    k0,sf=I.k0,I.sf
+
+    mode_sign={"positive":"+","negative":"-"}.get((I.polarity).lower()) 
     
+    calibrants=np.sort(np.array([pySPM.utils.get_mass(i) for i in Calibrants if i.endswith(mode_sign)])) #shortended calibrants list
+    x_um,y_um=I.size["real"]["x"]*1e6,I.size["real"]["y"]*1e6
+    sputtertime=I.get_value("Measurement.SputterTime")["float"] 
+
     Output_folder=str(Path(basedir,Path(itmfile).stem))
-    fs=str(Path(Output_folder,Path(itmfile).stem)) #base filename for outputs
+    fs=str(Path(Output_folder,Path(itmfile).stem))+"("+mode_sign+")"  #base filename for outputs (with polarity)
     if not os.path.exists(Output_folder): os.makedirs(Output_folder)
     
     if write_params: 
@@ -624,82 +683,171 @@ for itmfile in itmfiles:
         ds=pd.DataFrame(np.fromfile(fin,dtype=np.uint32).reshape(-1,5)[:,[0,2,3,4]],
                         columns=["scan","x","y","tof"]).astype(np.uint32)
     
-    #truncate scans
-    if max_scans: ds=ds[ds["scan"]<=max_scans] 
+
+ 
+    fig,ax=plt.subplots()
+    plt.plot(ds.groupby("x").size())    
+    plt.plot(ds.groupby("y").size())
+    plt.ylabel("total counts")
+    plt.xlabel("unbinned pixels")
+    plt.legend(["x","y"])    
+    plt.title("pixel counts")
+    fig.savefig(fs+"_xy_counts.png")
+    
+    fig,ax=plt.subplots()
+    plt.plot(ds.groupby("scan").size())
+    plt.ylabel("total counts")
+    plt.xlabel("unbinned scans")
+    plt.title("scan counts")
+    fig.savefig(fs+"_scan_counts.png")
+    
+    #truncate scans/pixels
+    if max_scans>0: 
+        ds=ds[ds["scan"]<=max_scans] 
+        scans=max_scans
+    if max_x>0: 
+        ds=ds[ds["x"]<=max_x] 
+        xpix=max_x
+    if max_y>0: 
+        ds=ds[ds["y"]<=max_y] 
+        ypix=max_y
+    
+    #truncate scans/pixels and re-zero
+    if min_scans>0: 
+        ds=ds[ds["scan"]>=min_scans]
+        ds["scan"]-=min_scans
+        scans-=min_scans
+    if min_x>0: 
+        ds=ds[ds["x"]>=min_x]
+        ds["x"]-=min_x
+        xpix-=min_x
+    if min_y>0: 
+        ds=ds[ds["y"]>=min_y]
+        ds["y"]-=min_y
+        ypix-=min_y
+            
+    x_um=x_um*xpix/old_xpix
+    y_um=y_um*ypix/old_ypix        
+    sputtertime=sputtertime*scans/old_scans
+    
+    #trim bin edges
+    if Remove_bin_edges:
+        if bin_pixels: xpix-=xpix%bin_pixels
+        if bin_pixels: ypix-=ypix%bin_pixels
+        if bin_scans: scans-=scans%bin_scans
+        ds= ds[ (ds.x<xpix)  & (ds.y<ypix)  & (ds.scan<scans)   ]
     
     
-    ### Get ITM metadata ###
-    xpix,ypix= math.ceil(I.size["pixels"]["x"]), math.ceil(I.size["pixels"]["y"])
-    scans=math.ceil(I.Nscan)
-    k0,sf=I.k0,I.sf
-    mode_sign={"positive":"+","negative":"-"}.get((I.polarity).lower())
     
 
-    calibrants=np.sort(np.array([pySPM.utils.get_mass(i) for i in Calibrants if i.endswith(mode_sign)])) #shortended calibrants list
-    x_um,y_um=I.size["real"]["x"]*1e6,I.size["real"]["y"]*1e6
-    sputtertime=I.get_value("Measurement.SputterTime")["float"] #not sure if correct
-    
-    sSpectrum,ps,pns=pick_peaks(ds)      
+
+
     ###### Global calibration ######
     
     sSpectrum,ps,pns=pick_peaks(ds)                                                                      #this only picks "single peaks"
+    peaks=np.vstack([ps,pns])
+    lb,rb=peaks[:,1],peaks[:,2]
+    ds=ds[np.in1d(ds.tof,create_ranges(np.vstack([lb,rb]).T))]
+    
     centroids=np.array([centroid(sSpectrum[i[1]:i[2]].index,sSpectrum[i[1]:i[2]].values) for i in ps])   #calculate peak centroids
+    print("Calibrating")
     sf,k0,xcal,ycal=CalibrateGlobal(centroids,calibrants,sf,k0,ppm_cal=ppm_cal,weights=sSpectrum[ps[:,0]].values) #calibrate
-
+    print("Calibration Done")
     #truncate mass
     if max_mass: ds=ds[c2m(ds["tof"],sf,k0)<max_mass] 
-        
-
-
     np.save(fs+"_summed_spectrum",sSpectrum) #save summed spectrum
     
     ######  Get mass resolution ###### 
     
-    #linear fit of peak resolution
-    x,y=ps[:,0],(ps[:,2]-ps[:,1])#/2
-    s=np.argsort(x)
-    x,y=x[s],y[s]    
-    A = np.vstack([x, np.ones(len(x))]).T
-    [a, b], r = np.linalg.lstsq(A, y)[:2]
-    r2 = 1 - r / (y.size * y.var())
     
-    #plot resolution fit
-    fig,ax=plt.subplots()
-    plt.scatter(x,y)
-    plt.plot(x,x*a+b,color="red")
-    plt.xlabel("mass channel")
-    plt.ylabel("fwhm in channels")
-    plt.legend(["single peaks","linear fit, r2: "+str(np.round(r2,3)[0])])
-    fig.savefig(fs+"_channel_res.png",bbox_inches="tight",dpi=300)
-    plt.close()    
-       
-    ###### Filter channels on peakwidth ###### 
-       
-    p=np.vstack([ps,pns])
-    pw=p[:,2]-p[:,1]
-    rs=pw/(p[:,0]*a+b)
-    q=(rs>=min_width_ratio) & (rs<=max_width_ratio)
-    lb,rb=p[q,1].astype(int),p[q,2].astype(int)
+    #%% gussian filter of good hits here
     
-    fig,ax=plt.subplots()
-    plt.hist(rs,bins=50)
-    plt.vlines([min_width_ratio,max_width_ratio],0,ax.get_yticks()[-1],color="r",linestyle="--")
-    plt.title("peak width distribution")
-    plt.xlabel("ratio to expeted peakwidth")
-    plt.legend(["width cutoffs","peak width ratio"])
-    fig.savefig(fs+"_peak_widths.png",bbox_inches="tight",dpi=300)
-    plt.close()
+    if min_width_ratio or max_width_ratio or Peak_deconvolution:
+
+        print("Fitting peak resolution")
+
+
+        gaufits=[]
+        for p in ps:
+            c=sSpectrum[p[1]:p[2]]
+            x,y=np.arange(len(c)),c.values
+            x0=np.argmax(y)
+
+            popt, _ = curve_fit(Gauss, np.arange(len(y)),y,p0=[sSpectrum[p[0]],x0,(p[2]-p[1])/2.355])
+            yGau=Gauss(x,*popt)
+            r2=r2_score(y,yGau)
+            if r2>0.9: gaufits.append([p[0],popt[2]*2.355])
+                
+        gaufits=np.vstack(gaufits)
+        gaufits=gaufits[np.argsort(gaufits[:,0])]
+        xres,yres=gaufits[:,0],gaufits[:,1]
+
+         
+        try:
+            print("Gaussian resolution fit")
+            lres=loess.loess(xres, yres,span=0.75)
+            lres.fit()
+            pres = lres.predict(xres).values
+            r2=r2_score(yres,pres)
+
+        
+            
+        except:
+            print("Failed!")
+            print("Linear resolution fit")
+            #linear fit of peak resolution
+            xres,yres=ps[:,0],(ps[:,2]-ps[:,1])#/2
+            s=np.argsort(xres)
+            xres,yres=xres[s],yres[s]    
+            A = np.vstack([xres, np.ones(len(xres))]).T
+            [a, b], r = np.linalg.lstsq(A, yres)[:2]
+            
+            xres=len(sSpectrum)
+            pres=len(sSpectrum)*a+b
+            r2 = 1 - r / (yres.size * yres.var())
     
-    ds=ds[np.in1d(ds.tof,create_ranges(np.vstack([lb,rb]).T))]
+    
+        #plot resolution fit
+        fig,ax=plt.subplots()
+        plt.scatter(x,y)
+        plt.plot(xres,pres,color="red",linestyle="--")
+        plt.xlabel("mass channel")
+        plt.ylabel("fwhm in channels")
+        plt.legend(["single peaks","loessfit, r2: "+str(np.round(r2,3))])
+        fig.savefig(fs+"_channel_res.png",bbox_inches="tight",dpi=300)
+        plt.close()    
+    
+           
+        ###### Filter channels on peakwidth ###### 
+           
+  
+        pw=peaks[:,2]-peaks[:,1]
+        rs=pw/np.interp(peaks[:,0],xres,pres)
+        q=[True]*len(rs)
+        if max_width_ratio: q=(q) & (rs<=max_width_ratio)
+        if min_width_ratio: q=(q) & (rs<=min_width_ratio)
+        lb,rb=peaks[q,1].astype(int),peaks[q,2].astype(int)
+        
+        fig,ax=plt.subplots()
+        plt.hist(rs,bins=50,label="peak width ratio")
+        if max_width_ratio: plt.vlines(min_width_ratio,0,ax.get_yticks()[-1],color="r",linestyle="--",label="min width ratio")
+        if min_width_ratio: plt.vlines(max_width_ratio,0,ax.get_yticks()[-1],color="r",linestyle=":",label="max width ratio")
+            
+        plt.title("peak width distribution")
+        plt.xlabel("ratio to expeted peakwidth")
+        plt.legend()
+        fig.savefig(fs+"_peak_widths.png",bbox_inches="tight",dpi=300)
+        plt.close()
+        
+        ds=ds[np.in1d(ds.tof,create_ranges(np.vstack([lb,rb]).T))]
+    #%%
+
     
     ###### Assign peaks ######
     
-    pmat=np.zeros(p.max()+1,dtype=np.int64)
-    pmat[create_ranges(p[:,1:])]=np.repeat(np.arange(len(p)),p[:,2]-p[:,1])
-    ds["peak_bin"]=p[pmat[ds["tof"]],0]
-    
-    
-    
+    pmat=np.zeros(peaks.max()+1,dtype=np.int64)
+    pmat[create_ranges(peaks[:,1:])]=np.repeat(np.arange(len(peaks)),peaks[:,2]-peaks[:,1])
+    ds["peak_bin"]=peaks[pmat[ds["tof"]],0]
 
    
     #%%
@@ -714,6 +862,16 @@ for itmfile in itmfiles:
         ds["ROI"]=0
     else:
     
+
+        if Remove_bin_edges:
+            xpix-=xpix%ROI_bin_pixels
+            ypix-=ypix%ROI_bin_pixels
+            if (bool(ROI_bin_scans)) & (ROI_dimensions==3): 
+                    scans-=scans%ROI_bin_scans
+
+            ds= ds[ (ds.x<xpix)  & (ds.y<ypix)  & (ds.scan<scans)   ]
+
+    
         if ROI_dimensions==2: gcols=["x","y"]
         if ROI_dimensions==3: gcols=["x","y","scan"]
         col="peak_bin"
@@ -725,18 +883,17 @@ for itmfile in itmfiles:
         
         cd=rds.groupby(gcols+[col]).size().to_frame("count").reset_index() 
         
-    
-        #correct for pixel edges & scan edges
-        if ROI_bin_pixels:
-            
-            cd["count"]/=(np.hstack([[ROI_bin_pixels]*int(xpix/ROI_bin_pixels),(xpix%ROI_bin_pixels)])[cd["x"]]/ROI_bin_pixels)
-            cd["count"]/=(np.hstack([[ROI_bin_pixels]*int(ypix/ROI_bin_pixels),(ypix%ROI_bin_pixels)])[cd["y"]]/ROI_bin_pixels)
-            
-        if (bool(ROI_bin_scans)) & (ROI_dimensions==3):
-            cd["count"]/=(np.hstack([[ROI_bin_scans]*int(scans/ROI_bin_scans),(scans%ROI_bin_scans)])[cd["scan"]]/ROI_bin_scans)
-        
 
-    
+
+
+                 
+        if not Remove_bin_edges:
+            
+            if ROI_bin_pixels:
+                cd["count"]/=(np.hstack([[ROI_bin_pixels]*int(xpix/ROI_bin_pixels),(xpix%ROI_bin_pixels)+1])[cd["x"]]/ROI_bin_pixels)
+                cd["count"]/=(np.hstack([[ROI_bin_pixels]*int(ypix/ROI_bin_pixels),(ypix%ROI_bin_pixels)+1])[cd["y"]]/ROI_bin_pixels)
+                if (bool(ROI_bin_scans)) & (ROI_dimensions==3):
+                    cd["count"]/=(np.hstack([[ROI_bin_scans]*int(scans/ROI_bin_scans),(scans%ROI_bin_scans)+1])[cd["scan"]]/ROI_bin_scans)
 
         
         #limit to x top peaks
@@ -755,17 +912,17 @@ for itmfile in itmfiles:
         szm=np.zeros([len(sxys),len(ut)],dtype=bits(cd["count"].max()))  #convert back to int
         for ix,i in enumerate(sx): szm[ix,uz[i[:,0]]]=i[:,1]
         
-        #scaling
-        if ROI_scaling=="Robust":   szm=robust_scale(szm,axis=0)
-        if ROI_scaling=="Standard": szm=(szm-szm.mean(axis=0))/szm.std(axis=0) #z = (x - u) / s
-        if ROI_scaling=="Poisson":  szm=szm/np.sqrt(szm.mean(axis=0))  #2D poisson scaling X/ sqrt mean  /np.sqrt(szm.mean(axis=1))/
-        if ROI_scaling=="MinMax":   
-            mins=(szm.max(axis=0)-szm.min(axis=0))
-            mins[mins==0]=1 #avoid nan
-            szm=(szm-szm.min(axis=0))/mins
+        #future: implement coo matrix here
+        
+        szm=csr_matrix(szm)
+        #not spare first
+        if ROI_scaling=="Standard":  szm=StandardScaler(with_mean=False).fit_transform(szm)
+        if ROI_scaling=="Robust":    szm=robust_scale(szm,axis=0,with_centering=False)
+        if ROI_scaling=="Poisson":  szm=szm/np.sqrt(szm.mean(axis=0))  #2D poisson scaling X/ sqrt mean  /np.sqrt(szm.mean(axis=1))
         if ROI_scaling=="Jaccard":  szm=szm.astype(bool).astype(int)
-        szm[np.isnan(szm)]=0 #this doesnt work
-        szm=csr_matrix(szm).T
+        szm=szm.T
+        if ROI_scaling=="MinMax":    scale_sparse_matrix_rows(szm, lowval=0, highval=1) #szm=maxabs_scale(szm,axis=0)  #szm=MaxAbsScaler().fit_transform(szm) #doesnt work
+
         
         #Kmeans
         kmeans = KMeans(n_clusters=ROI_clusters, random_state=0, n_init="auto").fit(szm.T)
@@ -773,20 +930,18 @@ for itmfile in itmfiles:
         
         #map to space for indexing
         if ROI_dimensions==2: 
-            zroi=np.zeros([math.ceil(xpix/ROI_bin_pixels),math.ceil(ypix/ROI_bin_pixels)],dtype=np.int8)
+            zroi=np.zeros([cd.x.max()+1,cd.y.max()+1],dtype=np.int8)
             zroi[sxys[:,0],sxys[:,1]]=rois
         if ROI_dimensions==3: 
-            zroi=np.zeros([math.ceil(xpix/ROI_bin_pixels),math.ceil(ypix/ROI_bin_pixels),math.ceil(scans/ROI_bin_scans)],dtype=np.int8)
+            zroi=np.zeros([cd.x.max()+1,cd.y.max()+1,cd.scan.max()+1],dtype=np.int8)
             zroi[sxys[:,0],sxys[:,1],sxys[:,2]]=rois
-     
-        
-        
+
         np.save(fs+"_ROImap",zroi) #save ROI map
         
         #plot 2D ROIs
         if ROI_dimensions==2:
             fig,ax=plt.subplots()
-            g=sns.heatmap(rois.reshape(math.ceil(xpix/ROI_bin_pixels),math.ceil(ypix/ROI_bin_pixels)).T)
+            g=sns.heatmap(rois.reshape(math.ceil(xpix/ROI_bin_pixels),math.ceil(ypix/ROI_bin_pixels)).T,robust=True,cmap='RdBu_r')
             
             #update to pixels to micrometers
             ax.set_yticklabels((np.linspace(0,y_um,len(g.get_yticks()))).astype(int),rotation=0)
@@ -798,7 +953,7 @@ for itmfile in itmfiles:
             fig.savefig(fs+"_ROI_2D.png",dpi=300,bbox_inches="tight") #save 2D ROI plot
             plt.close()
    
-
+            
             
             
     
@@ -816,7 +971,7 @@ for itmfile in itmfiles:
             #plot all
             fig = px.scatter_3d(rdf, y='x', x='y', z='z',
                            color_discrete_sequence=px.colors.qualitative.Safe,        #Dark24/Vivid/Bold/Set1   
-                          color='r', size_max=18,opacity=0.02) 
+                          color='r', size_max=12,opacity=0.01) 
             
             fig.update_layout(scene = dict(xaxis=dict(title=dict(text='y [micrometer]')),
                                            yaxis=dict(title=dict(text='x [micrometer]')),
@@ -843,7 +998,9 @@ for itmfile in itmfiles:
                 
             fig.update_scenes(zaxis_autorange="reversed")
             fig.update_layout(scene_camera=camera, title="ROI 3D combined segmentation")
-            fig.update_scenes(aspectmode="cube")
+            
+            if rdf.z.max()>rdf.y.max() or rdf.x.max()>rdf.y.max():
+                fig.update_scenes(aspectmode="cube")
             
             #fig.show()
             fig.write_html(fs+"_ROI_3D_combined.html") #save 3d ROI plot
@@ -854,7 +1011,7 @@ for itmfile in itmfiles:
                 
                 d=rdf[rdf["r"]==str(roi)]
                 fig = go.Figure(data=[go.Scatter3d(x=d["y"], y=d["x"], z=d["z"],
-                                       mode='markers',opacity=0.02)])
+                                       mode='markers',opacity=0.04)])
                 
                 
                 fig.update_traces(marker=dict(line=dict(width=0),
@@ -888,17 +1045,19 @@ for itmfile in itmfiles:
                     eye=dict(x=1.65, y=1.25, z=1.55)
                 )
         
-    
+                if d.z.max()>d.y.max() or d.x.max()>d.y.max():
+                    fig.update_scenes(aspectmode="cube")
         
                 fig.update_layout(scene_camera=camera, title="ROI 3D segment "+str(roi))
                 
                 #fig.show()
                 fig.write_html(fs+"_ROI_3D_segment"+str(roi)+".html") #save 3d ROI plot
     
-
-            
-       #%%
+   
+      
+    #%%
     ###### Depth profile ######
+    
     
     #do depth profile per ROI
     if ROI_clusters:
@@ -911,10 +1070,11 @@ for itmfile in itmfiles:
     cd=ds.groupby(["peak_bin","scan","ROI"]).size().to_frame("count").reset_index()
     
     
-    ss=[]
-    for roi in range(ROI_clusters): #Depth profile per ROI
+    biplot_roipeaks=[]
+    for roi in range(ROI_clusters+1): #Depth profile per ROI
         
         rcd=cd[cd["ROI"]==roi]
+        if not len(rcd): continue
         
         if normalize: #normalize to total count per scan
             rcd["count"]=rcd["count"]/rcd.groupby("scan")["count"].sum().loc[rcd.scan].values 
@@ -926,78 +1086,274 @@ for itmfile in itmfiles:
                 if len(g)!=len(scan_arr):
                     ms=scan_arr[~np.in1d(scan_arr,g)]
                     missing_scans.append(np.vstack([np.repeat(n,len(ms)),ms]).T)
-            rcd=pd.concat([rcd,pd.DataFrame(np.vstack(missing_scans),columns=["peak_bin","scan"])]).fillna(0).astype(int).sort_values(by=["peak_bin","scan"]).reset_index(drop=True)
+            if missing_scans:
+                rcd=pd.concat([rcd,pd.DataFrame(np.vstack(missing_scans),columns=["peak_bin","scan"])]).fillna(0).astype(int).sort_values(by=["peak_bin","scan"]).reset_index(drop=True)
             rcd=rcd.groupby("peak_bin").rolling(smoothing).mean().reset_index()[['peak_bin', 'scan', 'count']].fillna(0) 
         
         rcd["peak_bin"]=c2m(rcd["peak_bin"],sf,k0)
         rcd["peak_bin"]=rcd["peak_bin"]*(1-np.interp(rcd["peak_bin"],xcal,ycal)/1e6)
                     
+        #save depth ROI profile
+        if ROI_clusters>1: rcd.to_csv(fs+"_ROI"+str(roi)+"_depth_profile.tsv",sep="\t")  
+        else:              rcd.to_csv(fs+"_depth_profile.tsv",sep="\t")  
+        
+
+        biplot_roipeaks.append(rcd.groupby("peak_bin")["count"].sum())
+        
+        #save summed channels
+        # summed_channels=ds[ds["ROI"]==roi].groupby(["tof","scan"]).size()
+        # cdf=pd.DataFrame(np.vstack(np.unique(summed_channels.values,return_counts=True)).T,columns=["s","c"])
+        
+        rds=ds[ds["ROI"]==roi]
+        ss,_=smooth_spectrum(rds)
+        rps,pi=find_peaks(ss,distance,prominence=10)
+        lb,rb=pi["left_bases"],pi["right_bases"]
+        
+        #remove overlapping lb rb
+        pdf=pd.DataFrame(np.vstack([rps,lb,rb]).T,columns=["peak","lb","rb"])
+        pdf["width"]=pdf["rb"]-pdf["lb"]
+        pdf.sort_values(by=["lb","width"],ascending=[True,False])
+        pdf=pdf.sort_values(by=["lb","width"],ascending=[True,False]).groupby("lb",sort=False).nth(0)
+        rps,lb,rb=pdf.peak.values,pdf.lb.values,pdf.rb.values
+   
+            
+        if Peak_deconvolution:    
+            
+            #merge overlapping peaks
+            t=np.diff(rps)>np.interp(rps,xres,pres)[:-1]
+            groups=np.hstack([0,np.cumsum(np.diff(np.hstack([-1,np.argwhere(t)[:,0],len(rps)-1])))])
+
+            pborders=np.vstack([[lb[groups[i]],rb[groups[i+1]-1]] for i in np.arange(len(groups)-1)])
+            deconv_peaks=[]
+            ext=10
+          
+    
+            def gaussian2(x, amplitude, mean, stddev):
+                """Single Gaussian function"""
+                return amplitude * np.exp(-((x - mean) / stddev)**2 / 2)
+
+            def multi_gaussian(x, *params):
+                """Sum of multiple Gaussian functions"""
+                result = np.zeros_like(x).astype(float)
+                # Each Gaussian has 3 parameters: amplitude, mean, stddev
+                for i in range(0, len(params), 3):
+                    amplitude = params[i]
+                    mean = params[i + 1]
+                    stddev = params[i + 2]
+                    result += gaussian2(x, amplitude, mean, stddev).astype(float)
+                return result
+
+            
+            for ix,b in enumerate(pborders):
+                
+ 
+                
+                w=np.interp(b[1],xres,pres)
+                sigma=w/2.355
+                v=ss[b[0]-ext:b[1]+ext+1]
+                v=gaussian_filter(v,w/20) #10
+                cwp=find_peaks_cwt(v,w/5) #4 #these divisors and the resolution fit affect this a lot, this should be generalized more
+                
+                #window should be based on the expected width of the peak vs the total width
+                
+            
+                if len(cwp)<=1: 
+                    cwp=[np.argmax(v)]
+                    deconv_peaks.append(np.hstack([b[0]+cwp,
+                                                   v[cwp]]))
+                    
+            
+                else: 
+                    
+           
+                        #initial fit 
+                        xs=np.arange(len(v))
+                        X=np.vstack([gaussian(xs,c,sigma) for c in cwp])
+                        coeffs,_= nnls(X.T, v)
+                        xt=(X.T*coeffs).T
+                        
+                        
+                        #test plot
+                        # fig,ax=plt.subplots()
+                        # plt.plot(v)
+                        # ax.vlines(cwp,0,v.max(),color="grey")
+                        # for y in xt :
+                        #     plt.plot(xs,y)
+                        # plt.title(ix)
+                    
+                        #secondary fit
+                        lower_bounds= np.tile([0             ,0,sigma/2]   ,len(cwp))
+                        upper_bounds= np.tile([v.max()*2,len(v),sigma  ]   ,len(cwp))
+                        initial_guess=np.vstack([v[cwp],cwp,np.repeat(sigma,len(cwp))]).T.flatten() 
+                        popt, pcov = curve_fit(multi_gaussian, np.arange(len(v)), v, 
+                                              p0=initial_guess, 
+                                              bounds=(lower_bounds, upper_bounds),
+                                              maxfev=10000)
+                        
+                        #calc r2
+                        y_pred=multi_gaussian(np.arange(len(v)),*popt)
+                        rpopt=popt.reshape(len(cwp),-1)
+           
+                        r2 = r2_score(v, y_pred)
+                        if r2>0.95: deconv_peaks.append(np.vstack([b[0]+rpopt[:,1],rpopt[:,0]]).T) 
+                        else:       deconv_peaks.append(np.vstack([b[0]+np.argmax(v),v.max()]).T) 
+                
+          
+                        
+                        # #test plot
+                        # fig,ax=plt.subplots()
+                        # plt.plot(v)
+                        # vs=[]
+                        # for i in popt.reshape(len(cwp),-1):
+                        #     of=gaussian2(np.arange(len(v)),*i)
+                        #     vs.append(of)
+                        #     plt.plot(of)
+                        # plt.plot(np.vstack(vs).sum(axis=0),color="black",linestyle="--")
+                        # plt.title([ix,np.round(r2,2)])
+                                 
+                                 
+
+            ROIpeaks=np.vstack(deconv_peaks)
+        else: 
+            ROIpeaks=ss[rps].reset_index().values
+            
+        ROIpeaks=pd.DataFrame(ROIpeaks,columns=["TOF","Apex"]) 
+        ROIpeaks["FWHM"]=np.interp(ROIpeaks["TOF"],xres,pres)
+        
+        ROIpeaks["mass"]=c2m(ROIpeaks["TOF"],sf,k0)
+        ROIpeaks["mass"]*=(1-np.interp(ROIpeaks["mass"],xcal,ycal)/1e6)
+
+        
+
+        
+  
+        #% Isotope detection
+        if Detect_isotopes:
+    
+            imass=(ROIpeaks[["mass"]].values+(isotope_range*0.997).reshape(1,-1)).flatten()
+            isos=np.tile(isotope_range,len(ROIpeaks))
+            ixs=np.repeat(np.arange(len(ROIpeaks)),len(isotope_range))
+            
+            tree = KDTree(ROIpeaks["mass"].values.reshape(-1,1), leaf_size=200) 
+            l=tree.query_radius(imass.reshape(-1,1), r=imass*ippm/1e6)
+            links=np.vstack([np.vstack([np.repeat(ix,len(i)),i]).T for ix,i in enumerate(l) if len(i)])
+    
+            links=pd.DataFrame(links,columns=["ix","ri"])
+            links["isotope"]=isos[links.ix]
+            links["index"]=ixs[links.ix]
+            links[["TOF","mass","Apex","FWHM"]]=ROIpeaks[["TOF","mass","Apex","FWHM"]].loc[links.ri,:].values
+    
+            #shady code?
+            links=links.sort_values(by=["ix","index","Apex"],ascending=[True,True,False])
+            links=links.groupby(["ix","index"],sort=False).nth(0)
+            
+            #%cosine similarity filtering
+    
+            tofs=create_ranges(np.vstack([links["TOF"]-links["FWHM"]/2,links["TOF"]+links["FWHM"]/2]).round(0).astype(int).T)
+            rds=rds[rds.tof.isin(tofs)]
+            rds=rds.groupby(["scan","tof"]).size().reset_index()
+            rds.columns=["scan","tof","count"]
+            
+            #construct coo matrix
+            utof,uscan=np.unique(rds.tof),np.unique(rds.scan)
+            
+            ztof=np.zeros(utof[-1]+1,dtype=np.uint64)
+            ztof[utof]=np.arange(len(utof))
+            rds["ztof"]=ztof[rds.tof]
+            
+            zscan=np.zeros(uscan[-1]+1,dtype=np.uint64)
+            zscan[uscan]=np.arange(len(uscan))
+            rds["zscan"]=zscan[rds.scan]
+    
+        
+            rdscoo=coo_matrix((rds["count"], (rds["ztof"], rds["zscan"])), shape=(int(rds.ztof.max()+1), int(rds.scan.max()+1))).tocsr()
+            
+            if co_normalize:
+                rss=np.asarray(rdscoo.sum(axis=0)).flatten()
+                if co_smoothing: rss=np.convolve(rss, np.ones(smoothing), 'valid') / smoothing
+                rss[rss==0]=1
+            
+            gs=[]
+            for n,g in links.groupby("index"):
+    
+                l,r=g["TOF"]-g["FWHM"]/2,g["TOF"]+g["FWHM"]/2
+                bs=np.vstack([l,r]).round(0).astype(int).T #clip
+                cmat=[]
+                for b in bs:
+                    cols=ztof[np.clip(np.arange(*b),0,len(ztof)-1)]
+                    dp=np.asarray(rdscoo[cols[cols>0],:].sum(axis=0)).flatten()
+                    if co_smoothing: dp=np.convolve(dp, np.ones(smoothing), 'valid') / smoothing
+                    if co_normalize: dp=dp/rss
+                    cmat.append(dp)
+                cmat=np.vstack(cmat)
+                A=cmat[np.argwhere(g.isotope==0)[:,0],:]
+                res = np.dot(A/norm(A, axis=1)[...,None],(cmat/norm(cmat,axis=1)[...,None]).T) #cosine sim
+                g["cos"]=res.T
+                gs.append(g)
+                
+    
+            ROIpeaks=pd.concat(gs)
+            ROIpeaks=ROIpeaks[ROIpeaks["cos"]>min_cosine]
+            
+        #write ROIpeaks
+
+        if ROI_clusters>1: ROIpeaks.to_csv(fs+"_ROI"+str(roi)+"_peaks.tsv",sep="\t")  
+        else:              ROIpeaks.to_csv(fs+"_peaks.tsv",sep="\t")  
+
+    if ROI_clusters>1:
+        ##### Depth profile Biplot ######
+        
+        #https://stackoverflow.com/questions/39216897/plot-pca-loadings-and-loading-in-biplot-in-sklearn-like-rs-autoplot
+        #https://statomics.github.io/HDDA/svd.html#7_SVD_and_Multi-Dimensional_Scaling_(MDS)   
+        #https://scentellegher.github.io/machine-learning/2020/01/27/pca-loadings-sklearn.html
         
         
-        #Correct calibration here!
+        ss=pd.concat(biplot_roipeaks,axis=1).sort_index()
+        ss.columns=[np.arange(ROI_clusters)]
+        ss.index=np.round(ss.index,2)
         
+        #principle component analysis
+        ss=(ss-ss.min())/(ss.max()-ss.min()+1) #minmax scaling
+        ss=ss.fillna(0)
+        pca = PCA(n_components=2).fit(ss.T)
+        X_reduced = pca.transform(ss.T)
+        scores = X_reduced[:, :2]
+        loadings=pca.components_.T
+        pvars = pca.explained_variance_ratio_[:2] * 100
         
-        if ROI_clusters>1: rcd.to_csv(fs+"_ROI"+str(roi)+"_depth_profile.tsv",sep="\t")  #save depth profile
-        else:              rcd.to_csv(fs+"_depth_profile.tsv",sep="\t")  #save depth profile
+        # proportions of variance explained by axes
+        k=10
+        arrows = loadings * np.abs(scores).max(axis=0)
+        st = (loadings ** 2).sum(axis=1).argsort()
+        tops=st[-k:]
+        arrows = loadings[tops]
         
-        if ROI_clusters>1: rcd.groupby("peak_bin")["count"].sum().to_csv(fs+"_ROI"+str(roi)+"_summed_peaks.tsv",sep="\t")  #save summed_peaks
-        else:              rcd.groupby("peak_bin")["count"].sum().to_csv(fs+"_summed_peaks.tsv",sep="\t")                  #save summed peaks
+        rdf=pd.DataFrame(np.hstack([sxys,rois.reshape(-1,1)]),columns=gcols+["r"])
+        roi_reorder=rdf["r"].drop_duplicates().values.astype(int) 
+        plt.figure(figsize=(5, 5))
+        fig,ax=plt.subplots()
+        for rx,i in enumerate(scores):
+            c=tuple([int(i)/255 for i in px.colors.qualitative.Safe[roi_reorder[rx]][4:-1].split(", ")])
+            plt.scatter(i[0],i[1],c=c,label=rx)
+        ax.legend(loc=[1.05,0.02])
+        plt.title("ROI biplot")
         
-        ss.append(rcd.groupby("peak_bin")["count"].sum())
-    
-    ##### Depth profile Biplot ######
-    
-    #https://stackoverflow.com/questions/39216897/plot-pca-loadings-and-loading-in-biplot-in-sklearn-like-rs-autoplot
-    #https://statomics.github.io/HDDA/svd.html#7_SVD_and_Multi-Dimensional_Scaling_(MDS)   
-    #https://scentellegher.github.io/machine-learning/2020/01/27/pca-loadings-sklearn.html
-    
-    
-    ss=pd.concat(ss,axis=1).sort_index()
-    ss.columns=[np.arange(ROI_clusters)]
-    ss.index=np.round(ss.index,2)
-    
-    #principle component analysis
-    ss=(ss-ss.min())/(ss.max()-ss.min()+1) #minmax scaling
-    ss=ss.fillna(0)
-    pca = PCA(n_components=2).fit(ss.T)
-    X_reduced = pca.transform(ss.T)
-    scores = X_reduced[:, :2]
-    loadings=pca.components_.T
-    pvars = pca.explained_variance_ratio_[:2] * 100
-    
-    # proportions of variance explained by axes
-    k=10
-    arrows = loadings * np.abs(scores).max(axis=0)
-    st = (loadings ** 2).sum(axis=1).argsort()
-    tops=st[-k:]
-    arrows = loadings[tops]
-    
-    rdf=pd.DataFrame(np.hstack([sxys,rois.reshape(-1,1)]),columns=gcols+["r"])
-    roi_reorder=rdf["r"].drop_duplicates().values.astype(int) 
-    plt.figure(figsize=(5, 5))
-    fig,ax=plt.subplots()
-    for rx,i in enumerate(scores):
-        c=tuple([int(i)/255 for i in px.colors.qualitative.Safe[roi_reorder[rx]][4:-1].split(", ")])
-        plt.scatter(i[0],i[1],c=c,label=rx)
-    ax.legend(loc=[1.05,0.02])
-    plt.title("ROI biplot")
-    
-    # axis labels
-    for i, axis in enumerate('xy'):
-        getattr(plt, f'{axis}ticks')([])
-        getattr(plt, f'{axis}label')(f'PC{i + 1} ({pvars[i]:.2f}%)')
-    
-    width = -0.001 * np.min([np.subtract(*plt.xlim()), np.subtract(*plt.ylim())])
-    
-    # features as arrows
-    for a, arrow in enumerate(arrows):
-        plt.arrow(0, 0, *arrow, color='k', alpha=0.5, width=width, ec='none',
-                  length_includes_head=True)
-    
-    ta.allocate_text(fig,ax,arrows[:,0],arrows[:,1],ss.index[tops])
-    
-    plt.savefig(fs+"depth_profile_biplot.png",dpi=300,bbox_inches="tight")
-    plt.close()
+        # axis labels
+        for i, axis in enumerate('xy'):
+            getattr(plt, f'{axis}ticks')([])
+            getattr(plt, f'{axis}label')(f'PC{i + 1} ({pvars[i]:.2f}%)')
+        
+        width = -0.001 * np.min([np.subtract(*plt.xlim()), np.subtract(*plt.ylim())])
+        
+        # features as arrows
+        for a, arrow in enumerate(arrows):
+            plt.arrow(0, 0, *arrow, color='k', alpha=0.5, width=width, ec='none',
+                      length_includes_head=True)
+        
+        ta.allocate_text(fig,ax,arrows[:,0],arrows[:,1],ss.index[tops])
+        
+        plt.savefig(fs+"depth_profile_biplot.png",dpi=300,bbox_inches="tight")
+        plt.close()
     
     ###### Dimension reduction ######
     
@@ -1012,13 +1368,13 @@ for itmfile in itmfiles:
     ds["scan"]=  (ds["scan"] /MVA_bin_scans   ).astype(int) 
     ds=ds.astype(np.uint32)
     #xpix,ypix,scans= xpix/MVA_bin_pixels,ypix/MVA_bin_pixels,scans/MVA_bin_scans
-    
+    #%%
 
     ###### Create peak matrix #####
     for MVA_dimension in MVA_dimensions:
         
         
-        if MVA_dimension==1: gcols=["scan","ROI"]
+        if MVA_dimension==1: gcols=["scan"] #["scan","ROI"]
         if MVA_dimension==2: gcols=["x","y"]
         if MVA_dimension==3: gcols=["x","y","scan"]
         
@@ -1045,12 +1401,29 @@ for itmfile in itmfiles:
                 if len(cds)>MVA_peaks: 
                     cd=cd[cd[col].isin(cds.sort_values().index[:MVA_peaks])] 
    
-            #correct for pixel edges & scan edges
-            if (bool(MVA_bin_pixels)) & ("x" in cd.columns):      cd["count"]/=(np.hstack([[MVA_bin_pixels]*int(xpix/MVA_bin_pixels),xpix%MVA_bin_pixels+1])[cd["x"]]/MVA_bin_pixels)
-            if (bool(MVA_bin_pixels)) & ("y" in cd.columns):      cd["count"]/=(np.hstack([[MVA_bin_pixels]*int(ypix/MVA_bin_pixels),ypix%MVA_bin_pixels+1])[cd["y"]]/MVA_bin_pixels)
-            if (bool(MVA_bin_scans)) & ("scan" in cd.columns):    cd["count"]/=(np.hstack([[MVA_bin_scans]*int(scans/MVA_bin_scans),scans%MVA_bin_scans+1])[cd["scan"]]/MVA_bin_scans)
-                          
-#%%
+    
+   
+       
+            if Remove_bin_edges:
+                if (bool(MVA_bin_pixels)) & ("x" in cd.columns):   
+                    if xpix%MVA_bin_pixels: cd=cd[cd.x!=cd.x.max()]
+                if (bool(MVA_bin_pixels)) & ("y" in cd.columns):
+                    if ypix%MVA_bin_pixels: cd=cd[cd.y!=cd.y.max()]
+                if (bool(MVA_bin_scans)) & ("scan" in cd.columns):    
+                    if scans%MVA_bin_scans:  cd=cd[cd.scan!=cd.scan.max()]
+                     
+            else: #correct for pixel edges & scan edges
+                
+                #correct for pixel edges & scan edges
+                if (bool(MVA_bin_pixels)) & ("x" in cd.columns):      cd["count"]/=(np.hstack([[MVA_bin_pixels]*int(xpix/MVA_bin_pixels),xpix%MVA_bin_pixels+1])[cd["x"]]/MVA_bin_pixels)
+                if (bool(MVA_bin_pixels)) & ("y" in cd.columns):      cd["count"]/=(np.hstack([[MVA_bin_pixels]*int(ypix/MVA_bin_pixels),ypix%MVA_bin_pixels+1])[cd["y"]]/MVA_bin_pixels)
+                if (bool(MVA_bin_scans)) & ("scan" in cd.columns):    cd["count"]/=(np.hstack([[MVA_bin_scans]*int(scans/MVA_bin_scans),scans%MVA_bin_scans+1])[cd["scan"]]/MVA_bin_scans)
+                              
+    
+       
+        
+       
+
             
             if len(cd):
                 #min count filtering
@@ -1065,78 +1438,83 @@ for itmfile in itmfiles:
                 
                 xys=cd[gcols].values
                 split_at=np.argwhere(np.any(np.diff(xys,axis=0)!=0,axis=1))[:,0]
-                
                 sxys=np.vstack([xys[split_at],xys[-1]])
                 
+                if len(sxys)==1: 
+                    print("Skipping ROI: too little pixels/scans for MVA")
+                    continue
                 
+                #coo based sparse construction (try to fix this later!)
+                # zix=np.zeros((xys.max()+1),dtype=np.int32)
+                # zix[sxys]=np.arange(len(sxys)).reshape(-1,1)
+                # cd["x"]=zix[cd[gcols].values]
+                # cd["y"]=uz[cd[col]]
+                # szm=coo_matrix((cd["count"], (cd["x"], cd["y"])), shape=(int(cd.x.max()+1), int(cd.y.max()+1))).tocsr()
+            
+
+                #indexing based sparse construction
                 sx=np.array_split(cd[[col,"count"]].values.astype(np.uint32),split_at+1)
                 szm=np.zeros([len(sxys),len(ut)],dtype=bits(cd["count"].max()))  
                 for ix,i in enumerate(sx): szm[ix,uz[i[:,0]]]=i[:,1]
-                    
+                szm=csr_matrix(szm)
+                
+                
                 # if  Top_quantile: #only keep top abundant  
                 #     szm[:,np.argwhere(szm.mean(axis=0)<np.quantile(szm.mean(axis=0),Top_quantile))]=0 
                 
                 if Remove_zeros: 
-                    q=szm.sum(axis=0)>0 
+                    q=np.asarray(szm.sum(axis=0)>0).flatten()
                     ut=ut[q]
                     szm=szm[:,q]
-                  
-                if Sparse_first: szm=csr_matrix(szm)
-                    
+            
+                szmsum=np.array(szm.sum(axis=0)).T
+   
+                
                 ### MVA Scaling 
                 
                 #not spare first
-                if MVA_scaling=="Standard": 
-                    
-                    if Sparse_first:  szm=StandardScaler().fit_transform(szm)
-                    else:               szm=(szm-szm.mean(axis=0))/szm.std(axis=0) #z = (x - u) / s
-                #can be sparse first
-                if MVA_scaling=="Robust":   
-                    if Sparse_first: szm=robust_scale(szm,axis=0,with_centering=False)
-                    else:              szm=robust_scale(szm,axis=0)
-
-                if MVA_scaling=="MinMax":   
-                    if Sparse_first: 
-                        print("Sparse matrix detected, using max-abs scaling over min-max")
-                        szm=MaxAbsScaler().fit_transform(szm)
-                    else: 
-                        mins=(szm.max(axis=0)-szm.min(axis=0))
-                        mins[mins==0]=1 #avoid nan
-                        szm=(szm-szm.min(axis=0))/mins
-
-                #works if sparse first
-                if MVA_scaling=="Poisson":  szm=szm/np.sqrt(szm.mean(axis=0))  #2D poisson scaling X/ sqrt mean  /np.sqrt(szm.mean(axis=1))
-                if MVA_scaling=="Jaccard":  szm=szm.astype(bool).astype(int)
-                if not Sparse_first: szm=csr_matrix(szm)
-                
+                if MVA_scaling=="Standard":  szm=StandardScaler(with_mean=False).fit_transform(szm)
+                if MVA_scaling=="Robust":    szm=robust_scale(szm,axis=0,with_centering=False)
+                if MVA_scaling=="Poisson":   szm=szm/np.sqrt(szm.mean(axis=0))  #2D poisson scaling X/ sqrt mean  /np.sqrt(szm.mean(axis=1))
+                if MVA_scaling=="Jaccard":   szm=szm.astype(bool).astype(int)
                 szm=szm.T
+                if MVA_scaling=="MinMax":   scale_sparse_matrix_rows(szm, lowval=0, highval=1)  #szm=maxabs_scale(szm,axis=0)  #szm=MaxAbsScaler().fit_transform(szm) #doesnt work#szm=MaxAbsScaler().fit_transform(szm)
+            
+            
                 if szm.shape[1]<=MVA_components: n_components=szm.shape[1]-1 
                 else:                            n_components=MVA_components
             
                 
                 for MVA_method in MVA_methods:
-                       
+                      
+            
                     if MVA_method=="NMF":
                         model = NMF(n_components=n_components, init=NMF_algorithm, random_state=0, verbose=True,max_iter=20000)
                         MVA = model.fit_transform(szm)
                         loadings=model.components_
+                        if reconstruct: MVA=MVA/MVA.sum(axis=1).reshape(-1,1)*szmsum  
                         
                     if MVA_method=="PCA":
                         clf = TruncatedSVD(n_components=n_components,algorithm=PCA_algorithm) #random is fast, arpack is more accurate
                         MVA = clf.fit_transform(szm.astype(float))
                         if Varimax: MVA =varimax(MVA)
-                        loadings=clf.components_* np.sqrt(clf.explained_variance_).reshape(-1,1)
+                        loadings=clf.components_#* np.sqrt(clf.explained_variance_).reshape(-1,1)
                 
+           
+
+                    
             
                     ldf=pd.DataFrame(np.hstack([sxys,loadings.T]),columns=gcols+np.arange(n_components).tolist())
                                     
                     if data_reduction=="binning": #group by peak
                         mdf=pd.DataFrame(np.hstack([c2m(ut*MVA_bin_tof,sf,k0).reshape(-1,1),MVA]),columns=["mass"]+np.arange(n_components).tolist())
-                        mdf["peak_mass"]=c2m(p[pmat[m2c(mdf.mass,sf,k0)],0],sf,k0)
+                        mdf["peak_mass"]=c2m(peaks[pmat[m2c(mdf.mass,sf,k0)],0],sf,k0)
                         mdf=mdf.groupby("peak_mass",sort=False)[np.arange(n_components).tolist()].sum()
                     else:
                         mdf=pd.DataFrame(np.hstack([c2m(ut,sf,k0).reshape(-1,1),MVA]),columns=["peak_mass"]+np.arange(n_components).tolist())
                        
+                    ldf.sum(axis=0)    
+                     
                     #recalibrate peak_mass outputs
                     mdf.index=mdf.index*(1-np.interp(mdf.index,xcal,ycal)/1e6)
                     
@@ -1148,8 +1526,7 @@ for itmfile in itmfiles:
                         ldf.to_csv(fs+"_"+str(MVA_dimension)+"D_"+MVA_method+"_loadings.csv")
                         mdf.to_csv(fs+"_"+str(MVA_dimension)+"D_"+MVA_method+"_components.csv")
                     
-                      #%%
-                        
+             
                     ### plot mass loadings
                     rows,cols=n_components//5,5
                     if n_components%5: rows+=1
@@ -1176,7 +1553,7 @@ for itmfile in itmfiles:
                     
                 
               
-                    #%% Plot 1D
+                    #% Plot 1D
                     
                     if MVA_dimension==1:
                         
@@ -1204,7 +1581,7 @@ for itmfile in itmfiles:
                         plt.close()
   
                     
-                    #%% Plot 2D
+                    #% Plot 2D
                     
                     if MVA_dimension==2:
                     
@@ -1221,7 +1598,7 @@ for itmfile in itmfiles:
                             hm.columns = hm.columns.droplevel().astype(int)
                             hm.index=hm.index.astype(int)
                             
-                            g=sns.heatmap(hm,ax=axes[i],cbar=False,center=0,robust=True)
+                            g=sns.heatmap(hm,ax=axes[i],cbar=False,center=0,robust=True,cmap='RdBu_r')
                             
                             #update to pixels to micrometers
                             axes[i].set_yticklabels((np.linspace(0,y_um,len(g.get_yticks()))).astype(int),rotation=0)
@@ -1235,13 +1612,11 @@ for itmfile in itmfiles:
                             i.title.set_text(ix+1)
                         
                         fig.savefig(fs+"_"+MVA_method+"_2D_loadings.png",dpi=300,bbox_inches="tight") #save summed intensity png
-                       
-                     
                         plt.close()
                         
 
                     
-                    #%% Plot 3D
+                    #% Plot 3D
                     
                     if MVA_dimension==3:
                     
@@ -1256,10 +1631,12 @@ for itmfile in itmfiles:
                             #X,Y,Z=np.meshgrid(np.arange(math.ceil(xpix)), np.arange(math.ceil(ypix)),np.arange(math.ceil(scans)))
                             xpx,ypx,scx= xpix/MVA_bin_pixels,ypix/MVA_bin_pixels,scans/MVA_bin_scans
                             
-                            
-                            X,Y,Z=np.meshgrid(np.arange(math.ceil(xpx)), 
-                                              np.arange(math.ceil(ypx)),
-                                              np.arange(math.ceil(scx)))
+                            Y,X,Z=np.meshgrid(*[np.arange(i) for i in [int(vdf.y.max()+1),
+                                                                       int(vdf.x.max()+1),
+                                                                       int(vdf.scan.max()+1)]])
+                            # X,Y,Z=np.meshgrid(np.arange(int(vdf.x.max()+1)), 
+                            #                   np.arange(int(vdf.y.max()+1)),
+                            #                   np.arange(int(vdf.scan.max()+1)))
                             
                             
                             vm=np.zeros([math.ceil(xpx),math.ceil(ypx),math.ceil(scx)])
@@ -1325,7 +1702,6 @@ for itmfile in itmfiles:
                             fig.update_layout(scene_camera=camera, title="Component: "+str(i+1))
                             fig.update_scenes(aspectmode="cube")
                             
-
                             
                             #fig.show() #no fig show but write directly
                             fig.write_html(fs+"_"+MVA_method+"_3D_comp"+str(i)+"loading.html") #save summed intensity 
