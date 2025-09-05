@@ -231,7 +231,7 @@ python "SIMSpy_MVA.py" -itmfiles "test.itm" -ROI_clusters 4 -ROI_dimensions 3
 ```
 SIMSpy_MFP for molecular formula prediction with a custom database
 ``` 
-python "SIMSpy_MFP.py" -input_files "test.itm" -MFP_db "my_db.comp" -ppm 100 -top_candidates 20
+python "SIMSpy_MFP.py" -input_files "ROI0_peaks.tsv" -MFP_db "my_db.comp" -ppm 100 -top_candidates 20
 ```
 SIMSpy_Targeted for plotting groups of known fragments in 3D
 ``` 
