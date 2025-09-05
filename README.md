@@ -2,7 +2,7 @@
 
 SIMSpy is a collection of python routines that enable untargeted multivariate analysis of TOF-SIMS data, molecular formula prediction, and targeted analysis of fragments.
 it relies on the module pySPM (https://github.com/scholi/pySPM) to extract metadata from IONTOF `.itm` and `.ita` files.
-The current version works with `.grd` raw data files, which need to be exported with the Surfacelab tool ITRawExport.
+The main input file is .itm but requires a `.grd` raw data file in the same folder, which need to be exported with the Surfacelab tool ITRawExport. 
 Future versions will aim to incorporate also .imzML inputs and custom tabular inputs.
 
 #### SIMSpy function overview 
@@ -40,11 +40,13 @@ peaks can be deconvoluted with gaussian mixture modellling.
 
 ### Calibration 
 
-First attempts to fit optimum values for sf and k0, which as used to convert tof values to mz.
-Then calibration is optimized using a list of internal calibrants.
+Calibration is key for accurate molecular formula prediction.
+Using a list of internal calibrants, 
+first optimal values for global sf and k0 are fitted, which as used to convert tof values to mz,
+then calibration minimizes the mass error locally.
 There is a list of substrate specific calibrants, and a list of sample specific calibrants.
 If calibration is unsuccesful, a higher ppm_cal value should be tried.
-Sor gold coated silicon wafers, a Substrate value of Au would be used. ITO substrates, InOSiSn can be used.
+Sor gold coated silicon wafers, a substrate value of Au would be used. ITO substrates, InOSiSn can be used.
 
 |Parameter           | Default values     |       Description|
 |-----------------|:-----------:|---------------|
@@ -55,18 +57,29 @@ Sor gold coated silicon wafers, a Substrate value of Au would be used. ITO subst
 
 #### Mass resolution detection
 
-Fitting the mass resolution
-filter out too narrow or too wide peaks
+Fitting the mass resolution can be used to predict the FWHM of peaks as a function of mass.
+This can then be used for peak deconvolution. Optionanly too narrow or too wide peaks can be removed.
+
+|Parameter           | Default values     |       Description|
+|-----------------|:-----------:|---------------|
+|min_width_ratio,max_width_ratio| 0  |remove based on ratio e of measured peak width/ expected peak width|
 
 #### ROI detection
 
-scaling
-clusters
-dimensions
+Regions of interest (ROI) are detected using Kmeans clustering, in 2D or 3D space to perform image segmentaiton.
 
+
+|Parameter           | Default values     |       Description|
+|-----------------|:-----------:|---------------|
+|ROI_clusters| 3 | Number of regions |     
+|ROI_dimensions | 3                     | 2D or 3D |
+|ROI_scaling|"Poisson" |  Options: False, "Poisson", "MinMax", "Standard", "Robust", "Jaccard"|
 
 
 #### Depth profile extraction
+
+Depth profiles for each individual ROI are exported. 
+
 
 Smoothing
 Normalize
@@ -77,6 +90,8 @@ Isotope range
 Cosine correlation
 
 #### MVA analsysis
+1D MVA can be applied to the depth profiles of each ROI.
+
 MVA type
 components
 dimensions
