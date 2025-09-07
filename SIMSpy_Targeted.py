@@ -716,19 +716,23 @@ for itmfile in itmfiles:
     
     print(itmfile)
     I = pySPM.ITM(itmfile)
-    
+        
     ### Get ITM metadata ###
+
+    #copy metadata to clipboard
+    #I.Series(I.getValues()).explode().str.replace("\x00"," ").reset_index().astype(str).to_clipboard()
+    
     xpix,ypix= math.ceil(I.size["pixels"]["x"]), math.ceil(I.size["pixels"]["y"])
+    zoom_factor=I.get_value("Registration.Raster.Zoom.Factor")["string"]
+    x_um,y_um=I.size["real"]["x"]*1e6/zoom_factor,I.size["real"]["y"]*1e6/zoom_factor
+    
     scans=math.ceil(I.Nscan)
+    sputtertime=I.get_value("Measurement.SputterTime")["float"] 
     old_xpix,old_ypix,old_scans=xpix,ypix,scans #store
     
     k0,sf=I.k0,I.sf
     mode_sign={"positive":"+","negative":"-"}.get((I.polarity).lower()) 
-
     calibrants=np.sort(np.array([getMz(i) for i in Calibrants if i.endswith(mode_sign)])) #shortended calibrants list
-    x_um,y_um=I.size["real"]["x"]*1e6,I.size["real"]["y"]*1e6 #is this the real FOV?
-    sputtertime=I.get_value("Measurement.SputterTime")["float"] #not sure if correct
-
 
     Output_folder=str(Path(basedir,Path(itmfile).stem))
     fs=str(Path(Output_folder,Path(itmfile).stem))+"("+mode_sign+")"  #base filename for outputs (with polarity)
@@ -1595,3 +1599,4 @@ for itmfile in itmfiles:
 
         # except:
         #     print("Warning! correlation failed" )
+
