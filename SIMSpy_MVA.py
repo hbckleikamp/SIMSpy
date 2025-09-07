@@ -651,16 +651,21 @@ for itmfile in itmfiles:
     I = pySPM.ITM(itmfile)
     
     ### Get ITM metadata ###
-    xpix,ypix= math.ceil(I.size["pixels"]["x"]), math.ceil(I.size["pixels"]["y"])
-    scans=math.ceil(I.Nscan)
-    old_xpix,old_ypix,old_scans=xpix,ypix,scans #store    
-    k0,sf=I.k0,I.sf
 
-    mode_sign={"positive":"+","negative":"-"}.get((I.polarity).lower()) 
+    #copy metadata to clipboard
+    #I.Series(I.getValues()).explode().str.replace("\x00"," ").reset_index().astype(str).to_clipboard()
     
-    calibrants=np.sort(np.array([pySPM.utils.get_mass(i) for i in Calibrants if i.endswith(mode_sign)])) #shortended calibrants list
-    x_um,y_um=I.size["real"]["x"]*1e6,I.size["real"]["y"]*1e6
+    xpix,ypix= math.ceil(I.size["pixels"]["x"]), math.ceil(I.size["pixels"]["y"])
+    zoom_factor=I.get_value("Registration.Raster.Zoom.Factor")["string"]
+    x_um,y_um=I.size["real"]["x"]*1e6/zoom_factor,I.size["real"]["y"]*1e6/zoom_factor
+    
+    scans=math.ceil(I.Nscan)
     sputtertime=I.get_value("Measurement.SputterTime")["float"] 
+    old_xpix,old_ypix,old_scans=xpix,ypix,scans #store
+    
+    k0,sf=I.k0,I.sf
+    mode_sign={"positive":"+","negative":"-"}.get((I.polarity).lower()) 
+    calibrants=np.sort(np.array([getMz(i) for i in Calibrants if i.endswith(mode_sign)])) #shortended calibrants list
 
     Output_folder=str(Path(basedir,Path(itmfile).stem))
     fs=str(Path(Output_folder,Path(itmfile).stem))+"("+mode_sign+")"  #base filename for outputs (with polarity)
@@ -1710,4 +1715,5 @@ for itmfile in itmfiles:
       
                     
                  
+
 
