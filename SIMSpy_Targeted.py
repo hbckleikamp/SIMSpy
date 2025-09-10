@@ -723,7 +723,7 @@ for itmfile in itmfiles:
     #I.Series(I.getValues()).explode().str.replace("\x00"," ").reset_index().astype(str).to_clipboard()
     
     xpix,ypix= math.ceil(I.size["pixels"]["x"]), math.ceil(I.size["pixels"]["y"])
-    zoom_factor=I.get_value("Registration.Raster.Zoom.Factor")["string"]
+    zoom_factor=float(I.get_value("Registration.Raster.Zoom.Factor")["string"])
     x_um,y_um=I.size["real"]["x"]*1e6/zoom_factor,I.size["real"]["y"]*1e6/zoom_factor
     
     scans=math.ceil(I.Nscan)
@@ -1599,4 +1599,5 @@ for itmfile in itmfiles:
 
         # except:
         #     print("Warning! correlation failed" )
+
 
