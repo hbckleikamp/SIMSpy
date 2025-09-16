@@ -65,21 +65,6 @@ base_vars=list(locals().copy().keys()) #base variables
 #Filepaths
 itmfiles=""
 
-itmfiles=["E:/Data/TOF_SIMS/UCL/110825_Sheaths/20250812_Cable bacteria/P_Spot VI_C1(sputter).itm",
-"E:/Data/TOF_SIMS/UCL/110825_Sheaths/20250812_Cable bacteria/N_Spot I_A1.itm",
-"E:/Data/TOF_SIMS/UCL/110825_Sheaths/20250812_Cable bacteria/N_Spot I_A2.itm",
-"E:/Data/TOF_SIMS/UCL/110825_Sheaths/20250812_Cable bacteria/N_Spot VI_A1.itm",
-#"E:/Data/TOF_SIMS/UCL/110825_Sheaths/20250812_Cable bacteria/N_Spot VI_A2(images).itm",
-#"E:/Data/TOF_SIMS/UCL/110825_Sheaths/20250812_Cable bacteria/N_Spot VI_C1(images).itm",
-"E:/Data/TOF_SIMS/UCL/110825_Sheaths/20250812_Cable bacteria/P_Spot I_B1.itm",
-"E:/Data/TOF_SIMS/UCL/110825_Sheaths/20250812_Cable bacteria/P_Spot II_A1.itm",
-"E:/Data/TOF_SIMS/UCL/110825_Sheaths/20250812_Cable bacteria/P_Spot II_B1.itm",
-#"E:/Data/TOF_SIMS/UCL/110825_Sheaths/20250812_Cable bacteria/P_Spot VI_A2(images).itm",
-"E:/Data/TOF_SIMS/UCL/110825_Sheaths/20250812_Cable bacteria/P_Spot VI_B1.itm"]
-
-
-#itmfiles=["E:/Data/TOF_SIMS/UCL/110825_Sheaths/20250812_Cable bacteria/N_Spot I_A1.itm"]
-
 grd_exe="C:/Program Files (x86)/ION-TOF/SurfaceLab 6/bin/ITRawExport.exe" #path to Grd executable 
 Output_folder=""
 write_params=True
@@ -105,7 +90,7 @@ Peak_deconvolution=True
 
 #Calibration
 ppm_cal=100         #maximum deviation for finding internal calibrants
-Substrate="InOSnSi"         #list of elements that are present on substrate
+Substrate="Au"         #list of elements that are present on substrate
 Substrate_Calibrants=str(Path(basedir,"Substrate_Calibrants.csv"))  #list of ions coming from substrate
 Calibrants=str(Path(basedir,"Calibrants.csv"))                      #list of typical background ions
 
@@ -1883,5 +1868,6 @@ for itmfile in itmfiles:
       
                     
                  
+
 
 
