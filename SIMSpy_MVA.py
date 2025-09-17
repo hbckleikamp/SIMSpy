@@ -29,7 +29,8 @@ import pandas as pd
 
 
 
-from skmisc import loess #specific module for weighted Loess
+# from skmisc import loess #specific module for weighted Loess
+# from moepy import lowess
 
 from scipy.optimize import curve_fit, nnls
 from scipy.signal import find_peaks,find_peaks_cwt, savgol_filter
@@ -65,6 +66,8 @@ base_vars=list(locals().copy().keys()) #base variables
 #Filepaths
 itmfiles=""
 
+
+
 grd_exe="C:/Program Files (x86)/ION-TOF/SurfaceLab 6/bin/ITRawExport.exe" #path to Grd executable 
 Output_folder=""
 write_params=True
@@ -86,11 +89,11 @@ prominence=10
 distance=20       #minimum distance between peaks
 extend_window=20  #extend around peak bases
 cwt_w=10          #wavelet transform window
-Peak_deconvolution=True
+Peak_deconvolution=False #True
 
 #Calibration
 ppm_cal=100         #maximum deviation for finding internal calibrants
-Substrate="Au"         #list of elements that are present on substrate
+Substrate="InOSnSi"         #list of elements that are present on substrate
 Substrate_Calibrants=str(Path(basedir,"Substrate_Calibrants.csv"))  #list of ions coming from substrate
 Calibrants=str(Path(basedir,"Calibrants.csv"))                      #list of typical background ions
 
@@ -116,7 +119,7 @@ co_smoothing=3     #smooth during cosine correlation of depth profiles
 min_cosine=0.9
 
 #MVA dimension reduction
-data_reduction="binning" #"binning" #or peak_picking
+data_reduction="peak_picking" #"binning" #or peak_picking
 
 #if binning
 MVA_bin_tof=5           # bins tof (mass)
@@ -334,6 +337,40 @@ def scale_sparse_matrix_rows(s, lowval=0, highval=1):
     D = highval - lowval
     scaled_01_vals = (d - minsr)/(maxsr - minsr)
     d[:] = scaled_01_vals*D + lowval
+    
+    
+from numpy.linalg import lstsq
+def tricube(d):
+    """Tricube weight function."""
+    w = (1 - np.abs(d) ** 3) ** 3
+    w[np.abs(d) >= 1] = 0
+    return w
+
+def loess_fit_point(x, y, x0, frac=0.3, sample_weights=None):
+    """Fit a local regression around point x0."""
+    n = len(x)
+    dist = np.abs(x - x0)
+    bandwidth = np.sort(dist)[int(frac * n)]
+    u = dist / bandwidth
+
+    # Kernel weights
+    w = tricube(u)
+
+    # Combine with user-provided sample weights (if any)
+    if sample_weights is not None:
+        w = w * sample_weights
+
+    # Weighted least squares
+    X = np.vstack([np.ones_like(x), x - x0]).T
+    W = np.diag(w)
+    beta, _, _, _ = lstsq(W @ X, W @ y, rcond=None)
+    y0 = beta[0]  # intercept is the fitted value at x0
+    return y0
+
+def loess_predict(x, y, x_new, frac=0.3, sample_weights=None):
+    """Predict smoothed values for new x points."""
+    return np.array([loess_fit_point(x, y, x0, frac, sample_weights) for x0 in x_new])
+
  
 #%%
 def CalibrateGlobal(channels,calibrants,sf,k0,
@@ -345,120 +382,163 @@ def CalibrateGlobal(channels,calibrants,sf,k0,
                     filename_add=""):
         
 
-    #try: 
+    try: 
     
+        
+            # #test
+            # sf,k0=I.sf,I.k0
+            # channels=centroids
+            # ppm_cal=200
+            # min_mass=10
+            # plot=True
+            # weights=sSpectrum[ps[:,0]].values
+            # bin_tof=1
+            # filename_add=""
     
-        # #test
-        # sf,k0=I.sf,I.k0
+        # ""+1
+    #%%
         # channels=centroids
-        # ppm_cal=200
-        # min_mass=10
         # plot=True
-        # weights=sSpectrum[ps[:,0]].values
-        # bin_tof=1
-        # filename_add=""
-
-    fcalibrants=calibrants[calibrants>min_mass]
-    q=np.argsort(channels)
-    channels=channels[q]
-    if len(weights): weights=weights[q]
-    mp=c2m(channels,sf,k0,bin_tof=bin_tof)
-    
-    tree = KDTree(mp.reshape(1,-1).T, leaf_size=200) 
-
-    l=tree.query_radius(fcalibrants.reshape(1,-1).T,r=fcalibrants*ppm_cal/1e6)
-    caldf=pd.DataFrame(fcalibrants,columns=["c"])
-    caldf["ix"]=[list(i) for i in l]
-    caldf=caldf.explode("ix").dropna()
-    caldf["ix"]=caldf["ix"].astype(int)
-    caldf["mass"]=mp[caldf.ix]
-    caldf["channels"]=channels[caldf.ix]
-    if len(weights): caldf["intensity"]=weights[caldf.ix]
-    caldf["ppm"]=(caldf["mass"]-caldf["c"])/caldf["c"]*1e6
-    caldf=caldf.sort_values(by="mass")
-    x,y=caldf["channels"],caldf["c"]
-    y_pred=c2m(x,sf,k0,bin_tof=bin_tof)
-
+        # min_mass=10
+        # bin_tof=MVA_bin_tof
+        # weights=sSpectrum[ps[qfin,0]].values
+        # filename_add="_"+MVA_method+"_"+str(nc)+"_"
     
     
-    ### base recalibration if fit is bad
-
-    if len(weights): r2 = r2_score(y, y_pred, sample_weight=caldf["intensity"].values)
-    else:            r2 = r2_score(y, y_pred)
-    if r2<0.95: 
-        if len(weights): [sf,k0], _ = curve_fit(c2m,x,y,p0=[sf,k0,bin_tof],sigma=1/caldf["intensity"].values, absolute_sigma=True)
-        else:            [sf,k0], _ = curve_fit(c2m,x,y,p0=[sf,k0,bin_tof])
+    
+        fcalibrants=calibrants[calibrants>min_mass]
+        q=np.argsort(channels)
+        channels=channels[q]
+        if len(weights): weights=weights[q]
+        mp=c2m(channels,sf,k0,bin_tof=bin_tof)
         
-        caldf["mass"]=c2m(caldf["channels"],sf,k0,bin_tof=bin_tof)
+        tree = KDTree(mp.reshape(1,-1).T, leaf_size=200) 
+    
+        l=tree.query_radius(fcalibrants.reshape(1,-1).T,r=fcalibrants*ppm_cal/1e6)
+        caldf=pd.DataFrame(fcalibrants,columns=["c"])
+        caldf["ix"]=[list(i) for i in l]
+        caldf=caldf.explode("ix").dropna()
+        caldf["ix"]=caldf["ix"].astype(int)
+        caldf["mass"]=mp[caldf.ix]
+        caldf["channels"]=channels[caldf.ix]
+        caldf["intensity"]=1
+        if len(weights): caldf["intensity"]=weights[caldf.ix]
+        caldf=caldf[caldf["intensity"]>0]
+            
+        
         caldf["ppm"]=(caldf["mass"]-caldf["c"])/caldf["c"]*1e6
-
+        caldf=caldf.sort_values(by="mass")
     
-
-    ### weighed Loess with quantile denoising
-    x,y=caldf["mass"],caldf["ppm"]
-    if len(weights):l=loess.loess(x, y, weights=np.log2(caldf["intensity"].values),span=0.9)
-    else:           l=loess.loess(x, y,span=0.9)
-    l.fit()
-    p = l.predict(x).values
+        x,y,w=caldf["channels"].values,caldf["c"].values,caldf["intensity"].values
+        y_pred=c2m(x,sf,k0,bin_tof=bin_tof)
     
-    #quantile denoise worst fits and fit again
-    pm=p-caldf["ppm"].values
-    q1,q3=np.percentile(pm,25),np.percentile(pm,75) 
-    q=(pm<q3+1.5*(q3-q1)) & (pm>q3-1.5*(q3-q1))
-
-    xq,yq=x[q],y[q]
-    if len(weights):l=loess.loess(xq, yq, weights=np.log2(caldf["intensity"].values[q]),span=0.9)
-    else:           l=loess.loess(xq, yq,span=0.9)
-    l.fit()
-
-    if plot:
         
-        pq = l.predict(xq).values    
-        post_ppms=yq-pq
         
+        ### base recalibration if fit is bad
+    
+        if len(weights): r2 = r2_score(y, y_pred, sample_weight=caldf["intensity"].values)
+        else:            r2 = r2_score(y, y_pred)
+        if r2<0.95: 
+            if len(weights): [sf,k0], _ = curve_fit(c2m,x,y,p0=[sf,k0,bin_tof],sigma=1/caldf["intensity"].values, absolute_sigma=True)
+            else:            [sf,k0], _ = curve_fit(c2m,x,y,p0=[sf,k0,bin_tof])
             
-        if len(weights):
-            mpre=(caldf["ppm"]*caldf["intensity"]).sum()/caldf["intensity"].sum()
-            mpost=(post_ppms*caldf["intensity"]).sum()/caldf["intensity"].sum()
-            ampre=str(round(abs(caldf["ppm"]*caldf["intensity"]).sum()/caldf["intensity"].sum(),1))
-            ampost=str(round(abs(post_ppms*caldf["intensity"]).sum()/caldf["intensity"].sum(),1))
-        else:
-            mpre=caldf["ppm"].mean()
-            mpost=np.mean(post_ppms)
-            ampre=str(round(sum(abs(caldf["ppm"]))/len(caldf),1))
-            ampost=str(round(sum(abs(post_ppms))/len(caldf),1))
-            
-        #plotting
-        fig,ax=plt.subplots()
-        plt.scatter(x,caldf["ppm"],c=[(0.5, 0, 0, 0.3)],label="pre calibration")
-        plt.scatter(xq,post_ppms,   c=[(0, 0.5, 0, 0.3)],label="post calibration")
-        plt.plot(xq,pq,linestyle="--",color="grey",label="Loess fit")
-        plt.legend()
-        plt.xlabel("m/z")
-        plt.ylabel("ppm mass error")
-        plt.title("global_calibration")
-        fig.savefig(fs+filename_add+"_glob_cal_scat.png",bbox_inches="tight",dpi=300)
-        plt.close()
+            caldf["mass"]=c2m(caldf["channels"],sf,k0,bin_tof=bin_tof)
+            caldf["ppm"]=(caldf["mass"]-caldf["c"])/caldf["c"]*1e6
     
-        fig,ax=plt.subplots()
-        y1, _, _ =plt.hist(caldf["ppm"],color=(0.5, 0, 0, 0.3))
-        y2, _, _ =plt.hist(post_ppms,color=(0, 0.5, 0, 0.3))
-        plt.vlines(mpre,0,np.hstack([y1,y2]).max(),color=(0.5, 0, 0, 1),linestyle='dashed')
-        plt.vlines(mpost,0,np.hstack([y1,y2]).max(),color=(0, 0.5, 0, 1),linestyle='dashed')
-        plt.xlabel("ppm mass error")
-        plt.ylabel("frequency")
-        plt.legend(["pre: mean "+str(round(mpre,1))+ ", abs "+ampre,
-                    "post: mean "+str(round(mpost,1))+ ", abs "+ampost],
-                    loc=[1.01,0])
-        plt.title("global_calibration")
-        fig.savefig(fs+filename_add+"_glob_cal_hist.png",bbox_inches="tight",dpi=300)
-        plt.close()
         
+    
+        ### weighed Loess with quantile denoising
+        x,y=caldf["mass"],caldf["ppm"]
+        p = loess_predict(x, y, x, frac=0.9, sample_weights=w) #use own loess function (not a module)
+        
+    
+        
+        # #%%
+        
+        # if len(weights): l=loess.loess(x, y, weights=np.log2(caldf["intensity"].values),span=0.9)
+        # else:            l=loess.loess(x, y,span=0.9)
+    
+        # try: 
+        #     l.fit()
+        #     p = l.predict(x).values
+        # except: #try non-weighted lowess
+        #     lm=lowess.Lowess()
+        #     lm.fit(x.values, y.values)
+        #     p=lm.predict(x.values)
+    
+        
+        
+        
+        #quantile denoise worst fits and fit again
+        pm=p-caldf["ppm"].values
+        q1,q3=np.percentile(pm,25),np.percentile(pm,75) 
+        q=(pm<q3+1.5*(q3-q1)) & (pm>q3-1.5*(q3-q1))
+    
+        xq,yq,wq=x[q],y[q],w[q]
+        pq = loess_predict(xq, yq, xq, frac=0.9, sample_weights=wq)
+        
+        # if len(weights):l=loess.loess(xq, yq, weights=np.log2(caldf["intensity"].values[q]),span=0.9)
+        # else:           l=loess.loess(xq, yq,span=0.9)
+        
+        
+        # try: 
+        #     l.fit()
+        #     pq = l.predict(xq).values  
+        # except: #try non-weighted lowess
+        #     lm=lowess.Lowess()
+        #     lm.fit(xq.values, yq.values)
+        #     pq=lm.predict(xq.values)
+            
+    
+    
+        if plot:
+            
+              
+            post_ppms=yq-pq
+            
+                
+            if len(weights):
+                mpre=(caldf["ppm"]*caldf["intensity"]).sum()/caldf["intensity"].sum()
+                mpost=(post_ppms*caldf["intensity"]).sum()/caldf["intensity"].sum()
+                ampre=str(round(abs(caldf["ppm"]*caldf["intensity"]).sum()/caldf["intensity"].sum(),1))
+                ampost=str(round(abs(post_ppms*caldf["intensity"]).sum()/caldf["intensity"].sum(),1))
+            else:
+                mpre=caldf["ppm"].mean()
+                mpost=np.mean(post_ppms)
+                ampre=str(round(sum(abs(caldf["ppm"]))/len(caldf),1))
+                ampost=str(round(sum(abs(post_ppms))/len(caldf),1))
+                
+            #plotting
+            fig,ax=plt.subplots()
+            plt.scatter(x,caldf["ppm"],c=[(0.5, 0, 0, 0.3)],label="pre calibration")
+            plt.scatter(xq,post_ppms,   c=[(0, 0.5, 0, 0.3)],label="post calibration")
+            plt.plot(xq,pq,linestyle="--",color="grey",label="Loess fit")
+            plt.legend()
+            plt.xlabel("m/z")
+            plt.ylabel("ppm mass error")
+            plt.title("global_calibration")
+            fig.savefig(fs+filename_add+"_glob_cal_scat.png",bbox_inches="tight",dpi=300)
+            #plt.close()
+        
+            fig,ax=plt.subplots()
+            y1, _, _ =plt.hist(caldf["ppm"],color=(0.5, 0, 0, 0.3))
+            y2, _, _ =plt.hist(post_ppms,color=(0, 0.5, 0, 0.3))
+            plt.vlines(mpre,0,np.hstack([y1,y2]).max(),color=(0.5, 0, 0, 1),linestyle='dashed')
+            plt.vlines(mpost,0,np.hstack([y1,y2]).max(),color=(0, 0.5, 0, 1),linestyle='dashed')
+            plt.xlabel("ppm mass error")
+            plt.ylabel("frequency")
+            plt.legend(["pre: mean "+str(round(mpre,1))+ ", abs "+ampre,
+                        "post: mean "+str(round(mpost,1))+ ", abs "+ampost],
+                        loc=[1.01,0])
+            plt.title("global_calibration")
+            fig.savefig(fs+filename_add+"_glob_cal_hist.png",bbox_inches="tight",dpi=300)
+            plt.close()
+      #%%  
 
-    # except:
+    except:
        
-    #     print("calibration failed!, increase calibration ppm?")
-    #     return I.sf,I.k0,c2m(centroids,sf,k0,bin_tof=bin_tof),np.array([0]*len(centroids))
+        print("calibration failed!, increase calibration ppm?")
+        return I.sf,I.k0,c2m(centroids,sf,k0,bin_tof=bin_tof),np.array([0]*len(centroids))
         
     pd.DataFrame([[sf,k0]],columns=["sf","k0"]).to_csv(fs+"calib.csv")
 
@@ -666,7 +746,7 @@ def multi_gaussian(x, *params):
 def deconvolve(pborders,sSpectrum,ext=10,gau_filt=20,cwt=5,r2=0.95,Plot=False,bin_tof=1,max_width_ratio=10):
     
 
-    
+    #%%
     #needs
     #peak borders, columns: left_border, right_border
     #summed spectrum 
@@ -694,7 +774,7 @@ def deconvolve(pborders,sSpectrum,ext=10,gau_filt=20,cwt=5,r2=0.95,Plot=False,bi
         max_peaks=int(np.ceil((b[1]-b[0])/w*1.5))
         if len(cwp)>max_peaks: cwp=cwp[np.argsort(v[cwp])[::-1][:max_peaks]]
     
- #%%
+
         if len(cwp)<=1: 
             cwp=[np.argmax(v)]
             deconv_peaks.append(np.hstack([b[0]+cwp,
@@ -749,7 +829,7 @@ def deconvolve(pborders,sSpectrum,ext=10,gau_filt=20,cwt=5,r2=0.95,Plot=False,bi
                 
                 
 
-    
+    #%%
     return deconv_peaks
         
 
@@ -896,65 +976,67 @@ for itmfile in itmfiles:
     
     #%% gussian filter of good hits here
     
-    if min_width_ratio or max_width_ratio or Peak_deconvolution:
+    #if min_width_ratio or max_width_ratio or Peak_deconvolution:
 
-        print("Fitting peak resolution")
+    print("Fitting peak resolution")
 
 
-        gaufits=[]
-        for p in ps:
-            c=sSpectrum[p[1]:p[2]]
-            x,y=np.arange(len(c)),c.values
-            x0=np.argmax(y)
+    gaufits=[]
+    for p in ps:
+        c=sSpectrum[p[1]:p[2]]
+        x,y=np.arange(len(c)),c.values
+        x0=np.argmax(y)
 
-            popt, _ = curve_fit(Gauss, np.arange(len(y)),y,p0=[sSpectrum[p[0]],x0,(p[2]-p[1])/2.355])
-            yGau=Gauss(x,*popt)
-            r2=r2_score(y,yGau)
-            if r2>0.9: gaufits.append([p[0],popt[2]*2.355])
-                
-        gaufits=np.vstack(gaufits)
-        gaufits=gaufits[np.argsort(gaufits[:,0])]
-        xres,yres=gaufits[:,0],gaufits[:,1]
+        popt, _ = curve_fit(Gauss, np.arange(len(y)),y,p0=[sSpectrum[p[0]],x0,(p[2]-p[1])/2.355])
+        yGau=Gauss(x,*popt)
+        r2=r2_score(y,yGau)
+        if r2>0.9: gaufits.append([p[0],popt[2]*2.355])
+            
+    gaufits=np.vstack(gaufits)
+    gaufits=gaufits[np.argsort(gaufits[:,0])]
+    xres,yres=gaufits[:,0],gaufits[:,1]
 
-         
-        try:
-            print("Gaussian resolution fit")
-            lres=loess.loess(xres, yres,span=0.75)
-            lres.fit()
-            pres = lres.predict(xres).values
-            r2=r2_score(yres,pres)
-
+     
+    try:
+        print("Gaussian resolution fit")
         
-            
-        except:
-            print("Failed!")
-            print("Linear resolution fit")
-            #linear fit of peak resolution
-            xres,yres=ps[:,0],(ps[:,2]-ps[:,1])#/2
-            s=np.argsort(xres)
-            xres,yres=xres[s],yres[s]    
-            A = np.vstack([xres, np.ones(len(xres))]).T
-            [a, b], r = np.linalg.lstsq(A, yres)[:2]
-            
-            xres=len(sSpectrum)
-            pres=len(sSpectrum)*a+b
-            r2 = 1 - r / (yres.size * yres.var())
+        pres = loess_predict(xres, yres, xres, frac=0.75) #, sample_weights=w)
+        
+        # lres=loess.loess(xres, yres,span=0.75)
+        # lres.fit()
+        # pres = lres.predict(xres).values
+        r2=r2_score(yres,pres)
+     
     
-    
-        #plot resolution fit
-        fig,ax=plt.subplots()
-        plt.scatter(xres,yres)
-        plt.plot(xres,pres,color="red",linestyle="--")
-        plt.xlabel("mass channel")
-        plt.ylabel("fwhm in channels")
-        plt.legend(["single peaks","loessfit, r2: "+str(np.round(r2,3))])
-        fig.savefig(fs+"_channel_res.png",bbox_inches="tight",dpi=300)
+        
+    except:
+        print("Failed!")
+        print("Linear resolution fit")
+        #linear fit of peak resolution
+        xres,yres=ps[:,0],(ps[:,2]-ps[:,1])#/2
+        s=np.argsort(xres)
+        xres,yres=xres[s],yres[s]    
+        A = np.vstack([xres, np.ones(len(xres))]).T
+        [a, b], r = np.linalg.lstsq(A, yres)[:2]
+        
+        xres=len(sSpectrum)
+        pres=len(sSpectrum)*a+b
+        r2 = 1 - r / (yres.size * yres.var())
 
-        plt.close()    
+
+    #plot resolution fit
+    fig,ax=plt.subplots()
+    plt.scatter(xres,yres)
+    plt.plot(xres,pres,color="red",linestyle="--")
+    plt.xlabel("mass channel")
+    plt.ylabel("fwhm in channels")
+    plt.legend(["single peaks","loessfit, r2: "+str(np.round(r2,3))])
+    fig.savefig(fs+"_channel_res.png",bbox_inches="tight",dpi=300)
+    plt.close()    
     
            
-        ###### Filter channels on peakwidth ###### 
-           
+    ###### Filter channels on peakwidth ###### 
+    if min_width_ratio or max_width_ratio:   
   
         pw=peaks[:,2]-peaks[:,1]
         rs=pw/np.interp(peaks[:,0],xres,pres)
@@ -1260,19 +1342,14 @@ for itmfile in itmfiles:
         pdf=pdf.sort_values(by=["lb","width"],ascending=[True,False]).groupby("lb",sort=False).nth(0)
         rps,lb,rb=pdf.peak.values,pdf.lb.values,pdf.rb.values
    
-            
+
         if Peak_deconvolution:    
             
             #merge overlapping peaks
             t=np.diff(rps)>np.interp(rps,xres,pres)[:-1]
             groups=np.hstack([0,np.cumsum(np.diff(np.hstack([-1,np.argwhere(t)[:,0],len(rps)-1])))])
-
             pborders=np.vstack([[lb[groups[i]],rb[groups[i+1]-1]] for i in np.arange(len(groups)-1)])
-
-            deconv_peaks=deconvolve(pborders,ss)
-            
-                                 
-
+            deconv_peaks=deconvolve(pborders,ss,gau_filt=0)
             ROIpeaks=np.vstack(deconv_peaks)
         else: 
             ROIpeaks=ss[rps].reset_index().values
@@ -1611,62 +1688,51 @@ for itmfile in itmfiles:
                                                                     sf,k0,bin_tof=MVA_bin_tof,
                                                                     weights=sSpectrum[ps[qfin,0]].values,
                                                                     filename_add="_"+MVA_method+"_"+str(nc)+"_")
-                                #add bin tof argument
-                      
+                  
                 
-                
+
+                                #separate in positive and negative (for PCA)
+                                if np.any(spec<0): 
+                                    s=spec.copy()
+                                    s[s>0]=0
+                                    specs.append(s)
+                                    specpols.append("neg")
                                 
-                                #Output per component
-                                if Peak_deconvolution:
-                                        
-    
+                                if np.any(spec>0):
+                                    s=spec.copy()
+                                    s[s<0]=0
+                                    specs.append(s)
+                                    specpols.append("pos")
+                                
+                                comb=[]
+                                for sx,spectrum in enumerate(specs):
                                     
-                                    #separate in positive and negative (for PCA)
-                                    if np.any(spec<0): 
-                                        s=spec.copy()
-                                        s[s>0]=0
-                                        specs.append(s)
-                                        specpols.append("neg")
                                     
-                                    if np.any(spec>0):
-                                        s=spec.copy()
-                                        s[s<0]=0
-                                        specs.append(s)
-                                        specpols.append("pos")
+                                    if Peak_deconvolution:
                                     
-                                    comb=[]
-                                    for sx,spectrum in enumerate(specs):
                                         if specpols[sx]=="neg": spectrum*=-1
-    
                                         if reconstruct_intensity: p,pi=find_peaks(spectrum,distance=10,prominence=5)
                                         else:                     p,pi=find_peaks(spectrum,distance=10,prominence=0)
-                                            
-                                            
                                         pborders=np.vstack([pi["left_bases"],pi["right_bases"]]).T
-                                        
-                
                                         deconv_peaks=deconvolve(pborders,spectrum,bin_tof=MVA_bin_tof,ext=10,gau_filt=5)
                                         deconv_peaks=np.vstack(deconv_peaks) #peak, #height
-                                    
-                                    
-                                    
-                                    
-                 
                                         MVApeaks=pd.DataFrame(deconv_peaks,columns=["TOF","Apex"]) 
-                                        
+                                        if specpols[sx]=="neg": MVApeaks["Apex"]*=-1
+                                    else: 
+                                        aps=np.sort(np.vstack([ps,pns])[:,0])
+                                        MVApeaks=pd.DataFrame(sSpectrum[aps].reset_index().values,columns=["TOF","Apex"])
                                     
-                                    if specpols[sx]=="neg": MVApeaks["Apex"]*=-1
                                     MVApeaks["FWHM"]=np.interp(MVApeaks["TOF"],xres,pres)
                                     MVApeaks["mass"]=c2m((MVApeaks["TOF"]+int(MVA_bin_tof/2))*MVA_bin_tof,sf,k0)
                                     MVApeaks["mass"]*=(1-np.interp(MVApeaks["mass"],xcal,ycal)/1e6)
                                     comb.append(MVApeaks)
                                     
                                 MVApeaks=pd.concat(comb).sort_values(by="mass")
-        
+    
                                 if ROI_c>1:  MVApeaks.to_csv(fs+"_ROI"+str(roi)+"_"+str(MVA_dimension)+"D_"+MVA_method+"_"+str(nc)+"_peaks.csv")
                                 else:        MVApeaks.to_csv(fs+str(MVA_dimension)+"D_"+MVA_method+"_"+str(nc)+"_peaks.csv")
-                            
-        
+                        
+    
                                 
 
                         
@@ -1868,6 +1934,5 @@ for itmfile in itmfiles:
       
                     
                  
-
 
 
