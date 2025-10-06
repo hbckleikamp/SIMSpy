@@ -1048,6 +1048,7 @@ for itmfile in itmfiles:
     
     tar=pd.read_csv(Targets)
     tar=tar[tar.Formula.str.endswith(mode_sign)]
+    if "Group" not in tar.columns: tar["Group"]=0
     #tar=tar[tar.Group.isin(["Protein","Glycan"])].reset_index(drop=True) #testing
     #tar=tar[tar.Group.isin(["na"])].reset_index(drop=True) #testing
     #tar=pd.concat([tar,pd.DataFrame([i for i in Calibrants if i.endswith(mode_sign)],columns=["Formula"])]).fillna("na")
@@ -1599,6 +1600,7 @@ for itmfile in itmfiles:
 
         # except:
         #     print("Warning! correlation failed" )
+
 
 
 
