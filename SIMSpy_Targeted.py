@@ -76,12 +76,12 @@ load_params=""
 #initial dimension redution
 max_mass=200         #truncate mass
 max_scans=False      #truncate scans
-min_scans=50 #050
+min_scans=0 
 min_width_ratio=0 #0.1  #remove based on ratio to expected peakwidth
-min_x=30
-max_x=100
-min_y=0 #40 #40
-max_y=0 #90 #60
+min_x=0
+max_x=0
+min_y=0 
+max_y=0 
 max_width_ratio=0 #5    #remove based on ratio to expected peakwidth
 Remove_bin_edges=True   #when corners do not satifsy complete bins, trim them
 
@@ -1599,5 +1599,6 @@ for itmfile in itmfiles:
 
         # except:
         #     print("Warning! correlation failed" )
+
 
 
